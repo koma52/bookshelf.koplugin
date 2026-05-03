@@ -47,6 +47,29 @@ function BookshelfWidget:init()
     self.chip   = G_reader_settings:readSetting("bookshelf_active_chip") or "recent"
     self.page   = 1   -- 1-based; 8 books per page (4 cols × 2 shelves)
 
+    -- Page-flipping swipe gestures (anywhere on the home screen): west = next
+    -- page, east = previous page. Bound to a wide screen-zone so users can
+    -- flick from anywhere — the chip strip / hero / shelf rows don't claim
+    -- swipe gestures themselves so this catches all of them. Uses the
+    -- DTAP_ZONE_FORWARD / _BACKWARD ratios from KOReader defaults so it
+    -- matches the rest of the app's "swipe to page" muscle memory.
+    self.ges_events = {
+        SwipeNextPage = {
+            GestureRange:new{
+                ges = "swipe",
+                range = self.dimen,
+                direction = { west = true },
+            },
+        },
+        SwipePrevPage = {
+            GestureRange:new{
+                ges = "swipe",
+                range = self.dimen,
+                direction = { east = true },
+            },
+        },
+    }
+
     -- Register top-zone touch zones so the standard KOReader menu opens via
     -- tap/swipe at the top of the screen, exactly as it does in FileManager.
     -- UIManager does not propagate non-consumed events to widgets below the
@@ -189,6 +212,8 @@ function BookshelfWidget:_rebuild()
     local total_pages = math.max(1, math.ceil(total / PAGE_SIZE))
     if self.page > total_pages then self.page = total_pages end
     if self.page < 1 then self.page = 1 end
+    -- Cache for the swipe handlers (which run outside _rebuild's scope).
+    self._total_pages = total_pages
     local start_idx  = (self.page - 1) * PAGE_SIZE + 1
     local items      = {}
     for i = 0, PAGE_SIZE - 1 do items[i + 1] = all_items[start_idx + i] end
@@ -547,6 +572,29 @@ end
 -- callback in show().
 function BookshelfWidget:onCloseWidget()
     if self._on_close_callback then self._on_close_callback() end
+end
+
+-- Swipe gesture handlers: page through the active chip's data. west = next
+-- page (swipe content leftward), east = previous page. Series-expanded
+-- view doesn't paginate (a series usually fits in one shelf-pair).
+function BookshelfWidget:onSwipeNextPage()
+    if self._expanded_series then return false end
+    local total = self._total_pages or 1
+    if self.page < total then
+        self.page = self.page + 1
+        self:_rebuild()
+        UIManager:setDirty(self, "ui")
+    end
+    return true
+end
+function BookshelfWidget:onSwipePrevPage()
+    if self._expanded_series then return false end
+    if self.page > 1 then
+        self.page = self.page - 1
+        self:_rebuild()
+        UIManager:setDirty(self, "ui")
+    end
+    return true
 end
 
 -- _browseFiles()  — close home screen, open FileManager.

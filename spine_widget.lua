@@ -66,38 +66,33 @@ function SpineWidget:init()
 end
 
 -- Wraps an inner card widget in a "card with shadow" composition. The inner
--- widget is positioned at the top-left of the slot; a ShadowRect of the same
--- size is positioned at the bottom-right, painted behind the card. This
--- gives the impression of light from the top-left, with the shadow falling
--- both downward and to the right (the standard direction).
+-- widget paints at the slot's top-left (0,0); a ShadowRect of the same size
+-- is wrapped in a FrameContainer with top+left padding equal to
+-- SHADOW_OFFSET so it ends up at (offset, offset). The cover then paints on
+-- top, leaving the shadow visible as an L-shape on the right and bottom edges.
 --
--- Each positioning container gets its OWN Geom — KOReader containers mutate
--- dimen.x/y during paint, so a shared Geom causes wrappers to overwrite
--- each other's positions on second paint and shadows to drift on rerender.
+-- Why this approach instead of nested Top/Bottom/Left/RightContainer:
+--   * BottomContainer aligns its child to the bottom only when the child's
+--     getSize().h < dimen.h. We had been wrapping a full-slot RightContainer
+--     inside it, so the bottom-shift collapsed to zero — only horizontal
+--     offset was visible.
+--   * FrameContainer's padding directly shifts the inner widget's paint
+--     position by exactly the padding amount — straightforward, no centering
+--     surprises.
 function SpineWidget:_renderShadowedCard(inner)
     local card_w = self.width  - SHADOW_OFFSET
     local card_h = self.height - SHADOW_OFFSET
-    local function newDimen()
-        return Geom:new{ w = self.width, h = self.height }
-    end
+    local shadow_wrapper = FrameContainer:new{
+        bordersize   = 0,
+        padding      = 0,
+        padding_top  = SHADOW_OFFSET,
+        padding_left = SHADOW_OFFSET,
+        ShadowRect:new{ width = card_w, height = card_h },
+    }
     return OverlapGroup:new{
-        dimen = newDimen(),
-        -- Shadow at bottom-right.
-        BottomContainer:new{
-            dimen = newDimen(),
-            RightContainer:new{
-                dimen = newDimen(),
-                ShadowRect:new{ width = card_w, height = card_h },
-            },
-        },
-        -- Card at top-left, painted on top of the shadow.
-        TopContainer:new{
-            dimen = newDimen(),
-            LeftContainer:new{
-                dimen = newDimen(),
-                inner,
-            },
-        },
+        dimen = Geom:new{ w = self.width, h = self.height },
+        shadow_wrapper,   -- paints first, behind the cover
+        inner,            -- paints on top at (0,0), occupies top-left card_w × card_h
     }, card_w, card_h
 end
 
@@ -130,6 +125,7 @@ function SpineWidget:_renderFallback()
     -- width matches the visible interior so it stops at the rounded edge.
     local bar_w    = card_w - CARD_BORDER * 2
 
+    local v_pad = Size.padding.default
     local function whiteBar(text, face, bold)
         local box = TextBoxWidget:new{
             text      = text,
@@ -139,11 +135,13 @@ function SpineWidget:_renderFallback()
             bold      = bold,
         }
         return FrameContainer:new{
-            bordersize    = 0,
-            background    = Blitbuffer.COLOR_WHITE,
-            padding       = 0,
-            padding_left  = text_pad,
-            padding_right = text_pad,
+            bordersize     = 0,
+            background     = Blitbuffer.COLOR_WHITE,
+            padding        = 0,
+            padding_left   = text_pad,
+            padding_right  = text_pad,
+            padding_top    = v_pad,
+            padding_bottom = v_pad,
             box,
         }
     end

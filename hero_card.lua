@@ -123,8 +123,8 @@ function HeroCard:_renderFull()
 
     -- Book description / blurb. Pulled from BookInfoManager.description
     -- (populated when the book has been opened or scanned by coverbrowser).
-    -- Constrained to ~half the cover height with ellipsis overflow so it
-    -- can't push the progress bar / clock off the bottom.
+    -- We BUILD THE BOTTOM STACK FIRST below, so we can measure its actual
+    -- rendered height and cap the description to whatever's left over.
     local desc = self.book.description
     if desc and desc ~= "" then
         -- BookInfoManager stores the raw <dc:description> with embedded
@@ -157,40 +157,19 @@ function HeroCard:_renderFull()
                    :gsub("&gt;",     ">")
                    :gsub("&#(%d+);", codepointToUtf8)
                    :gsub("^%s+", ""):gsub("%s+$", "")
-        if desc ~= "" then
-            right_top[#right_top + 1] = VerticalSpan:new{ width = Size.padding.large }
-            -- TopContainer and BottomContainer share the same dimen and don't
-            -- coordinate — if right_top's natural height exceeds the cover
-            -- minus the bottom stack, the blurb visibly collides with the
-            -- progress bar / clock. Measure what's already in right_top and
-            -- subtract the estimated bottom-stack height to get a safe cap.
-            local top_used = 0
-            for i = 1, #right_top do
-                local s = right_top[i]:getSize()
-                top_used = top_used + (s and s.h or 0)
-            end
-            local bottom_h = Screen:scaleBySize(14)             -- progress bar
-                          + Size.padding.default                -- bar→clock gap
-                          + Screen:scaleBySize(16) * 1.4        -- clock line height
-                          + Size.padding.default                -- buffer
-            local available = cover_h - top_used - bottom_h
-            if available > Screen:scaleBySize(40) then
-                right_top[#right_top + 1] = TextBoxWidget:new{
-                    text   = desc,
-                    face   = Font:getFace("infofont", 14),
-                    width  = right_w,
-                    height = available,
-                    height_overflow_show_ellipsis = true,
-                }
-            end
-        end
+        -- Defer adding the description widget — we need to measure the
+        -- bottom stack's ACTUAL height first to compute the available space.
+        -- Stash the cleaned blurb on a local for use below.
     end
+    local cleaned_desc = desc and desc ~= "" and desc or nil
 
-    -- Bottom-anchored stack: [bar  N%] then clock+battery below.
-    -- Progress bar gets the percentage label inline on the right.
+    -- Build the bottom stack [bar N%] + clock-and-battery, BEFORE the
+    -- description, so we can measure its actual height. Estimating from
+    -- font sizes was too lossy and the description visibly collided with
+    -- the progress bar.
     local right_bottom_items = {}
     if self.book.book_pct then
-        local TextWidget    = require("ui/widget/textwidget")
+        local TextWidget     = require("ui/widget/textwidget")
         local HorizontalSpan = require("ui/widget/horizontalspan")
         local pct_widget = TextWidget:new{
             text = string.format("%d%%", math.floor(self.book.book_pct * 100 + 0.5)),
@@ -233,6 +212,31 @@ function HeroCard:_renderFull()
         align = "left",
         unpack(right_bottom_items),
     }
+
+    -- Now we can MEASURE the bottom stack to compute available space for
+    -- the description. The previous estimate (font 14 + font*1.4 etc.) was
+    -- consistently too small, leaving the description widget too tall and
+    -- overlapping the progress bar.
+    if cleaned_desc then
+        right_top[#right_top + 1] = VerticalSpan:new{ width = Size.padding.large }
+        local top_used = 0
+        for i = 1, #right_top do
+            local g = right_top[i]:getSize()
+            top_used = top_used + (g and g.h or 0)
+        end
+        local bottom_h = right_bottom:getSize().h
+        local breath   = Size.padding.large   -- visible gap between description and progress bar
+        local available = cover_h - top_used - bottom_h - breath
+        if available > Screen:scaleBySize(40) then
+            right_top[#right_top + 1] = TextBoxWidget:new{
+                text   = cleaned_desc,
+                face   = Font:getFace("infofont", 14),
+                width  = right_w,
+                height = available,
+                height_overflow_show_ellipsis = true,
+            }
+        end
+    end
 
     -- Compose right column: top content + bottom-anchored stack.
     local right_dimen = Geom:new{ w = right_w, h = cover_h }

@@ -116,14 +116,13 @@ function BookshelfWidget:_rebuild()
     local hero_cover_h = math.floor(hero_cover_w * 1.5)
     local hero_h       = hero_cover_h
 
-    -- Build TitleBar first so we can measure its actual height. The titlebar
-    -- spans the full screen width — it intentionally bypasses the page-padding
-    -- so the time/battery and gear icon sit at the screen edges.
-    local titlebar = self:_buildTitleBar(self.width)
-    local titlebar_h = titlebar:getHeight()
+    -- Title bar removed: clock + battery moved to the bottom of the hero
+    -- card right column (large font, below the progress bar). The gear
+    -- menu is reachable via the system top-zone tap/swipe (FileManagerMenu)
+    -- and via long-press on the hero or any cover.
+    local titlebar_h = 0
 
     -- Each shelf row shares the remaining vertical space equally.
-    -- Total reserved: titlebar + hero + chip strip + label + 4 internal gaps.
     local reserved_h = titlebar_h + hero_h + chip_h + label_h + PAD * 4
     local shelf_h    = math.floor((self.height - reserved_h) / 2)
 
@@ -376,9 +375,8 @@ function BookshelfWidget:_rebuild()
         height     = self.height,
         VerticalGroup:new{
             align = "left",
-            titlebar,                 -- full-width
             VerticalSpan:new{ width = PAD },
-            inner_content,            -- horizontally-padded body
+            inner_content,
         },
     }
 end

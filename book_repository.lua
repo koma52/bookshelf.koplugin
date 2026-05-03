@@ -82,6 +82,7 @@ function Repo.buildBook(filepath)
         cover_bb    = info.cover_bb,
         has_cover   = info.has_cover and not info.ignore_cover,
         lang        = info.language,
+        description = info.description,
         page_num    = ds:readSetting("last_page"),
         page_count  = info.pages,
         book_pct    = ds:readSetting("percent_finished"),

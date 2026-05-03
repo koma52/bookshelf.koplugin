@@ -57,11 +57,8 @@ function ShelfRow.new(opts)
     -- Size.padding.fullscreen × 2 ≈ 30dp at native scaling.
     local gap     = opts.gap or Size.padding.fullscreen * 2
     local slot_w  = math.floor((opts.width - gap * (n_slots - 1)) / n_slots)
-    -- Slot height is now bounded by a max of 4:3 aspect (slot_w * 1.33) so
-    -- covers stay visually compact rather than dominating the row vertically.
-    -- The 4 covers plus generous gaps already takes plenty of horizontal
-    -- space; capping height keeps the books proportionally smaller.
-    local slot_h  = math.floor(slot_w * 1.33)
+    -- Standard 2:3 book-cover aspect (slot_w * 1.5) so covers look like books.
+    local slot_h  = math.floor(slot_w * 1.5)
     local row     = HorizontalGroup:new{}
 
     for i = 1, n_slots do
@@ -100,10 +97,9 @@ function ShelfRow.new(opts)
         end
     end
 
-    -- Dotted base rule below the slot row.
-    local rule = ShelfRow._renderDottedRule(opts.width, Size.line.thick)
-
-    return VerticalGroup:new{ align = "left", row, rule }
+    -- Shelf base rule removed (read as visual noise rather than support).
+    -- Just return the slot row directly.
+    return row
 end
 
 return ShelfRow

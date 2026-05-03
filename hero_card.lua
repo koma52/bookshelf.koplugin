@@ -106,9 +106,6 @@ function HeroCard:_renderFull()
         for _, line in ipairs(self.lines) do
             local rendered = Tokens.expand(line, self.book, self.device_state)
             if not Tokens.isEmpty(rendered) then
-                -- Strip v0.1 inline format tags ([b][i][u]) before display.
-                -- TextBoxWidget has no markup renderer in v0.1; a future revision
-                -- may parse these and apply per-segment bold/italic/underline.
                 local display = rendered:gsub("%[/?[biu]%]", "")
                 right_top[#right_top + 1] = TextBoxWidget:new{
                     text  = display,
@@ -119,14 +116,27 @@ function HeroCard:_renderFull()
         end
     end
 
-    -- Progress bar anchored to the bottom of the right column. Height now
-    -- matches a token line's text height (font 14 → ~14dp at native scale)
-    -- so it reads as a real bar, not a hairline. Bookends uses the same
-    -- proportion for inline progress widgets.
-    local right_bottom
+    -- Book description / blurb. Pulled from BookInfoManager.description
+    -- (populated when the book has been opened or scanned by coverbrowser).
+    -- Constrained to ~half the cover height with ellipsis overflow so it
+    -- can't push the progress bar / clock off the bottom.
+    local Screen = require("device").screen
+    if self.book.description and self.book.description ~= "" then
+        right_top[#right_top + 1] = TextBoxWidget:new{
+            text   = self.book.description,
+            face   = Font:getFace("infofont", 14),
+            width  = right_w,
+            height = math.floor(cover_h * 0.40),
+            height_overflow_show_ellipsis = true,
+        }
+    end
+
+    -- Bottom-anchored stack: progress bar + large clock/battery readout below.
+    -- Progress bar: token-line-height tall (font 14 → ~14dp scaled).
+    -- Clock: 12-hour format with battery, big enough to read from arm's-length.
+    local right_bottom_items = {}
     if self.book.book_pct then
-        local Screen = require("device").screen
-        right_bottom = ProgressWidget:new{
+        right_bottom_items[#right_bottom_items + 1] = ProgressWidget:new{
             width      = right_w,
             height     = Screen:scaleBySize(14),
             percentage = self.book.book_pct,
@@ -135,21 +145,32 @@ function HeroCard:_renderFull()
         }
     end
 
-    -- Compose right column: top content + bottom-anchored progress bar.
-    -- OverlapGroup with TopContainer/BottomContainer fills the full cover height,
-    -- placing content at the top and the progress bar at the bottom with empty
-    -- space between them rather than below the content.
-    local right_dimen = Geom:new{ w = right_w, h = cover_h }
-    local right
-    if right_bottom then
-        right = OverlapGroup:new{
-            dimen = right_dimen,
-            TopContainer:new{ dimen = right_dimen, right_top },
-            BottomContainer:new{ dimen = right_dimen, right_bottom },
-        }
-    else
-        right = TopContainer:new{ dimen = right_dimen, right_top }
+    -- Build the clock + battery text.
+    local time_str = os.date("%I:%M %p"):gsub("^0", "")     -- "1:35 PM" not "01:35 PM"
+    local batt_str = ""
+    local s = self.device_state
+    if s and s.batt then
+        batt_str = (s.charging and "\xe2\x9a\xa1" or "") .. tostring(s.batt) .. "%"
     end
+    local clock_text = batt_str ~= "" and (time_str .. "   " .. batt_str) or time_str
+    right_bottom_items[#right_bottom_items + 1] = TextBoxWidget:new{
+        text  = clock_text,
+        face  = Font:getFace("infofont", 28),
+        width = right_w,
+        bold  = true,
+    }
+    local right_bottom = VerticalGroup:new{
+        align = "left",
+        unpack(right_bottom_items),
+    }
+
+    -- Compose right column: top content + bottom-anchored stack.
+    local right_dimen = Geom:new{ w = right_w, h = cover_h }
+    local right = OverlapGroup:new{
+        dimen = right_dimen,
+        TopContainer:new{ dimen = right_dimen, right_top },
+        BottomContainer:new{ dimen = right_dimen, right_bottom },
+    }
 
     -- Insert a HorizontalSpan between the cover and the right column so the
     -- text doesn't butt up against the cover edge.

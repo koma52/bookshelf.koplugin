@@ -252,4 +252,12 @@ function Tokens.expand(format, book, state)
     return result
 end
 
+function Tokens.isEmpty(s)
+    if not s then return true end
+    -- Strip inline format tags before deciding emptiness, otherwise [b][/b]
+    -- around an empty value would count as non-empty.
+    local stripped = s:gsub("%[/?[a-z]%]", "")
+    return stripped:match("^%s*$") ~= nil
+end
+
 return Tokens

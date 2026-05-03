@@ -170,5 +170,13 @@ test("width: {N} cap is preserved as marker for renderer", function()
     eq(Tokens.expand("%title{200}", b), "An extremely long book title that goes on{200}")
 end)
 
+test("autoHide: line of all empty tokens is hidden", function()
+    local b = bookFixture(); b.book_time_left_minutes = nil
+    eq(Tokens.isEmpty(Tokens.expand("%book_time_left", b)), true)
+end)
+test("autoHide: line with literal text is not empty", function()
+    eq(Tokens.isEmpty(Tokens.expand("Reading %title", bookFixture())), false)
+end)
+
 io.write(string.format("\n%d passed, %d failed\n", pass, fail))
 os.exit(fail == 0 and 0 or 1)

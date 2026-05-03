@@ -112,13 +112,21 @@ function BookshelfWidget:_rebuild()
     local total     = self:_chipTotal()
     local shown     = math.min(8, #items)
 
-    -- ── Shelf-pair label (tappable → LibraryView) ─────────────────────────────
+    -- ── Shelf-pair label (tappable → LibraryView or collapse series) ────────────
     -- Defined as a local InputContainer subclass using the standard extend-pattern
     -- (cleaner than the plan's inline class-mutation approach).
-    local label_text = string.format(
-        "%s  \xc2\xb7  1\xe2\x80\x93%d of %d  \xe2\x80\xba",
-        self:_chipLabel(), shown, total
-    )
+    -- When a series is expanded, the label reads "← Series name" and tapping
+    -- collapses back to the chip's data rather than opening LibraryView.
+    local is_expanded = (self._expanded_series ~= nil)
+    local label_text
+    if is_expanded then
+        label_text = "\xe2\x86\x90  " .. (self._expanded_series.series_name or "Series")
+    else
+        label_text = string.format(
+            "%s  \xc2\xb7  1\xe2\x80\x93%d of %d  \xe2\x80\xba",
+            self:_chipLabel(), shown, total
+        )
+    end
 
     -- We need a reference to self for the closure, but we're building inside
     -- _rebuild; capture in a local.
@@ -139,20 +147,27 @@ function BookshelfWidget:_rebuild()
         }
     end
     function ShelfLabel:onTap()
-        -- Close home screen and show LibraryView; schedule re-show on close
-        -- via nextTick so the UI stack order is correct.
-        UIManager:close(bw)
-        UIManager:nextTick(function()
-            UIManager:show(LibraryView:new{
-                chip          = bw.chip,
-                on_book_tap   = function(b) bw:_openBook(b) end,
-                on_book_hold  = function(b) bw:_openBookMenu(b) end,
-                on_series_tap = function(s) bw:_expandSeries(s) end,
-                on_close      = function()
-                    UIManager:nextTick(function() UIManager:show(bw) end)
-                end,
-            })
-        end)
+        if is_expanded then
+            -- Collapse back to the chip's data.
+            bw._expanded_series = nil
+            bw:_rebuild()
+            UIManager:setDirty(bw, "ui")
+        else
+            -- Close home screen and show LibraryView; schedule re-show on close
+            -- via nextTick so the UI stack order is correct (Phase 5 lesson).
+            UIManager:close(bw)
+            UIManager:nextTick(function()
+                UIManager:show(LibraryView:new{
+                    chip          = bw.chip,
+                    on_book_tap   = function(b) bw:_openBook(b) end,
+                    on_book_hold  = function(b) bw:_openBookMenu(b) end,
+                    on_series_tap = function(s) bw:_expandSeries(s) end,
+                    on_close      = function()
+                        UIManager:nextTick(function() UIManager:show(bw) end)
+                    end,
+                })
+            end)
+        end
         return true
     end
     local label_widget = ShelfLabel:new{}
@@ -350,20 +365,25 @@ end
 
 -- ─── Long-press book menu (Task 6.3) ─────────────────────────────────────────
 
-function BookshelfWidget:_openBookMenu(book)
-    if not book then return end
+-- _openBookMenu(item)
+-- item may be a Book record (from a SpineWidget tap) or a SeriesGroup record
+-- (from on_series_hold on a SeriesStack). Series groups have a .books field;
+-- we route to a series-specific dialog in that case.
+function BookshelfWidget:_openBookMenu(item)
+    if not item then return end
+    -- If the item is a series group, show a simpler series dialog.
+    if item.books then
+        return self:_openSeriesMenu(item)
+    end
+    local book = item
     local ButtonDialog   = require("ui/widget/buttondialogtitle")
     local ReadCollection = require("readcollection")
     local bw = self
-    local fav_label
     local ok_fav, in_fav = pcall(function()
         return ReadCollection:isFileInCollection(book.filepath, "favorites")
     end)
-    if ok_fav and in_fav then
-        fav_label = "Remove from favourites"
-    else
-        fav_label = "Add to favourites"
-    end
+    local fav_label = (ok_fav and in_fav)
+        and "Remove from favourites" or "Add to favourites"
     UIManager:show(ButtonDialog:new{
         title = book.title or book.filename or "Book",
         buttons = {
@@ -394,6 +414,24 @@ function BookshelfWidget:_openBookMenu(book)
                     bw:_rebuild()
                     UIManager:setDirty(bw, "ui")
                   end },
+                { text = "Cancel", callback = function() end },
+            },
+        },
+    })
+end
+
+-- _openSeriesMenu(series)  — long-press on a series stack.
+function BookshelfWidget:_openSeriesMenu(series)
+    local ButtonDialog = require("ui/widget/buttondialogtitle")
+    local bw = self
+    UIManager:show(ButtonDialog:new{
+        title = series.series_name or "Series",
+        buttons = {
+            {
+                { text = "Browse series",
+                  callback = function() bw:_expandSeries(series) end },
+            },
+            {
                 { text = "Cancel", callback = function() end },
             },
         },

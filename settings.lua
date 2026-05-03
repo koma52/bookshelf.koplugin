@@ -36,7 +36,11 @@ local function isTrue(key)
 end
 
 local function checkmark(key)
-    return isTrue(key) and "\xe2\x9c\x93" or ""   -- "✓" UTF-8
+    -- Return nil (not "") for the off state so Menu omits the mandatory
+    -- TextWidget rather than allocating an empty one (which would take
+    -- space and misalign rows).
+    if isTrue(key) then return "\xe2\x9c\x93" end
+    return nil
 end
 
 -- ─── Sub-actions ──────────────────────────────────────────────────────────────
@@ -65,7 +69,7 @@ function Settings:_editLine(idx, lines, menu_ref)
                     is_enter_default = true,
                     callback         = function()
                         local text = dialog:getInputText()
-                        lines[idx] = (text ~= "") and text or lines[idx]
+                        lines[idx] = text or ""
                         writeLines(lines)
                         UIManager:close(dialog)
                         if idx < 2 then
@@ -133,70 +137,69 @@ end
 -- right when enabled (via mandatory_func).  After toggling, the menu is
 -- re-opened so the user can see the updated state.
 function Settings:show()
-    local settings = self  -- capture for closures
+    -- Singleton guard: don't stack settings menus.
+    if self._menu then return end
 
-    -- Build item table each time show() is called so mandatory_func values
-    -- reflect the current persisted state.
     local item_table = {
         {
-            text     = _("Edit hero card lines\xe2\x80\xa6"),
-            callback = function()
-                settings:_editLines()
-            end,
+            text = _("Edit hero card lines"),
+            callback = function() self:_closeAnd(function() self:_editLines() end) end,
         },
         {
-            text     = _("Hero card font scale\xe2\x80\xa6"),
-            callback = function()
-                settings:_pickFontScale()
-            end,
+            text = _("Hero card font scale"),
+            callback = function() self:_closeAnd(function() self:_pickFontScale() end) end,
         },
         {
             text           = _("Show book progress bar"),
-            mandatory_func = function()
-                return checkmark("bookshelf_show_progress")
-            end,
+            mandatory_func = function() return checkmark("bookshelf_show_progress") end,
             callback = function()
                 local v = not isTrue("bookshelf_show_progress")
                 G_reader_settings:saveSetting("bookshelf_show_progress", v)
-                -- Re-open menu so the checkmark updates.
-                UIManager:nextTick(function() settings:show() end)
+                self:_reopen()
             end,
         },
         {
-            text     = _("\"Latest\" walk depth\xe2\x80\xa6"),
-            callback = function()
-                settings:_pickLatestDepth()
-            end,
+            text = _("\"Latest\" walk depth"),
+            callback = function() self:_closeAnd(function() self:_pickLatestDepth() end) end,
         },
         {
             text           = _("Show clock and battery in titlebar"),
-            mandatory_func = function()
-                return checkmark("bookshelf_show_titlebar_meta")
-            end,
+            mandatory_func = function() return checkmark("bookshelf_show_titlebar_meta") end,
             callback = function()
                 local v = not isTrue("bookshelf_show_titlebar_meta")
                 G_reader_settings:saveSetting("bookshelf_show_titlebar_meta", v)
-                UIManager:nextTick(function() settings:show() end)
+                self:_reopen()
             end,
         },
         {
-            text     = _("About"),
-            callback = function()
-                settings:_about()
-            end,
+            text = _("About"),
+            callback = function() self:_closeAnd(function() self:_about() end) end,
         },
     }
 
-    UIManager:show(Menu:new{
-        title      = _("Bookshelf settings"),
-        item_table = item_table,
-        is_popout  = true,
-        -- Prevent auto-close after selecting a toggle item so the re-show
-        -- nextTick fires without a race.  Non-toggle items (dialogs) already
-        -- open another widget before returning, so close_callback is fine
-        -- here as a no-op.
-        close_callback = function() end,
-    })
+    self._menu = Menu:new{
+        title          = _("Bookshelf settings"),
+        item_table     = item_table,
+        is_popout      = true,
+        close_callback = function()
+            -- Allow GC by clearing the reference. UIManager owns the actual close.
+            self._menu = nil
+        end,
+    }
+    UIManager:show(self._menu)
+end
+
+function Settings:_closeAnd(action)
+    -- Used for items that open another widget (InputDialog/SpinWidget/InfoMessage):
+    -- close the menu first, then dispatch the next widget on the next tick.
+    if self._menu then UIManager:close(self._menu); self._menu = nil end
+    UIManager:nextTick(action)
+end
+
+function Settings:_reopen()
+    -- Used for toggle items: close-and-reopen so the user sees the updated state.
+    if self._menu then UIManager:close(self._menu); self._menu = nil end
+    UIManager:nextTick(function() self:show() end)
 end
 
 return Settings

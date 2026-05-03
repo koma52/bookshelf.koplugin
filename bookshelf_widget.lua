@@ -527,18 +527,26 @@ end
 
 -- ─── Navigation ───────────────────────────────────────────────────────────────
 
--- _openBook(book)  — close home screen, open ReaderUI for the given book.
--- ReaderUI is required inside the function to avoid boot-order issues (Phase 5 lesson).
+-- _openBook(book)  — open ReaderUI for the given book WITHOUT closing
+-- the home screen. The Reader is shown on top in UIManager's stack;
+-- when the Reader closes, Bookshelf is exposed automatically with no
+-- intermediate FileManager flash. (Closing Bookshelf first leaves
+-- FileManager visible for one paint cycle before the close-document
+-- handler shows a fresh Bookshelf instance back on top.)
 function BookshelfWidget:_openBook(book)
     if not book or not book.filepath then return end
     -- Returning from a book should land on the chip-level view, not in the
     -- middle of an expanded series.
     self._expanded_series = nil
     local ReaderUI = require("apps/reader/readerui")
-    UIManager:close(self)
-    UIManager:nextTick(function()
-        ReaderUI:showReader(book.filepath)
-    end)
+    ReaderUI:showReader(book.filepath)
+end
+
+-- Cleanup hook: clears the plugin's tracked widget reference when this
+-- BookshelfWidget instance is closed for any reason. main.lua wires the
+-- callback in show().
+function BookshelfWidget:onCloseWidget()
+    if self._on_close_callback then self._on_close_callback() end
 end
 
 -- _browseFiles()  — close home screen, open FileManager.

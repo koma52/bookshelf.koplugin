@@ -130,9 +130,26 @@ end
 -- Show / takeover
 -- ---------------------------------------------------------------------------
 
+-- Show or refresh the BookshelfWidget. We keep a single instance live
+-- across the plugin's lifetime so opening a book and closing it doesn't
+-- require destroying + recreating + flashing the FileManager underneath.
 function Bookshelf:show()
+    if self._widget then
+        -- Already on the stack (probably underneath the Reader). Refresh data
+        -- and request a repaint so freshly-closed books surface in Recent etc.
+        self._widget:_rebuild()
+        UIManager:setDirty(self._widget, "ui")
+        return
+    end
     local BookshelfWidget = require("bookshelf_widget")
-    UIManager:show(BookshelfWidget:new{})
+    self._widget = BookshelfWidget:new{}
+    -- Clear our reference if the widget is dismissed for any reason, so a
+    -- subsequent show() falls back to the create path.
+    local outer = self
+    self._widget._on_close_callback = function()
+        outer._widget = nil
+    end
+    UIManager:show(self._widget)
 end
 
 function Bookshelf:_takeOver(fm_instance)
@@ -164,6 +181,11 @@ function Bookshelf:onCloseDocument()
     -- another. self.ui.document is still set in the latter case.
     if G_reader_settings:readSetting("start_with") ~= "bookshelf" then return end
     if self.ui and self.ui.document then return end
+    -- If Bookshelf is already on the stack (the typical "open book from
+    -- home, close back to home" flow now that _openBook leaves it there),
+    -- self:show()'s refresh path handles the repaint without ever exposing
+    -- FileManager. Fresh boot path through onCloseDocument (rare) creates
+    -- a new instance.
     UIManager:nextTick(function() self:show() end)
 end
 

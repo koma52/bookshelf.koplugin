@@ -109,14 +109,17 @@ function BookshelfWidget:_rebuild()
     local chip_h  = Size.item.height_default
     local label_h = Size.item.height_default
 
-    -- Hero card sized around its cover: cover ≈ 30% of content width, 2:3 aspect.
-    -- The hero card overall takes that height plus the single PAD budget.
+    -- Hero card sized exactly to its cover (no internal padding budget). The
+    -- VerticalSpan separators below the hero supply the gap to the chips, so
+    -- adding internal padding here would double-count the space.
     local hero_cover_w = math.floor(content_w * 0.30)
     local hero_cover_h = math.floor(hero_cover_w * 1.5)
-    local hero_h       = hero_cover_h + PAD
+    local hero_h       = hero_cover_h
 
-    -- Build TitleBar first so we can measure its actual height.
-    local titlebar = self:_buildTitleBar(content_w)
+    -- Build TitleBar first so we can measure its actual height. The titlebar
+    -- spans the full screen width — it intentionally bypasses the page-padding
+    -- so the time/battery and gear icon sit at the screen edges.
+    local titlebar = self:_buildTitleBar(self.width)
     local titlebar_h = titlebar:getHeight()
 
     -- Each shelf row shares the remaining vertical space equally.
@@ -334,20 +337,16 @@ function BookshelfWidget:_rebuild()
     -- separators between sections give the home screen breathing room.
     local VerticalSpan = require("ui/widget/verticalspan")
 
-    self[1] = FrameContainer:new{
-        bordersize = 0,
-        padding    = PAD,
-        background = paper_bg,
-        -- Force the page background to fill the whole screen so the
-        -- underlying FileManager doesn't bleed through below the content.
-        width      = self.width,
-        height     = self.height,
+    -- Inner content gets horizontal padding only; the titlebar above does
+    -- not, so it spans the full screen width. Vertical PADs come from the
+    -- VerticalSpan separators in the inner VerticalGroup.
+    local inner_content = FrameContainer:new{
+        bordersize    = 0,
+        padding       = 0,
+        padding_left  = PAD,
+        padding_right = PAD,
         VerticalGroup:new{
-            -- Every inter-section gap is the same single PAD value, matching
-            -- the page-edge padding and the inter-cover gap on the shelves.
             align = "left",
-            titlebar,
-            VerticalSpan:new{ width = PAD },
             hero,
             VerticalSpan:new{ width = PAD },
             chips,
@@ -357,6 +356,22 @@ function BookshelfWidget:_rebuild()
             row_bottom,
             VerticalSpan:new{ width = PAD },
             label_widget,
+        },
+    }
+
+    self[1] = FrameContainer:new{
+        bordersize = 0,
+        padding    = 0,           -- no outer padding — titlebar spans full width
+        background = paper_bg,
+        -- Force the page background to fill the whole screen so the
+        -- underlying FileManager doesn't bleed through below the content.
+        width      = self.width,
+        height     = self.height,
+        VerticalGroup:new{
+            align = "left",
+            titlebar,                 -- full-width
+            VerticalSpan:new{ width = PAD },
+            inner_content,            -- horizontally-padded body
         },
     }
 end

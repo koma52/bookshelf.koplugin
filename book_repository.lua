@@ -107,16 +107,24 @@ end
 -- ─── getRecent ───────────────────────────────────────────────────────────────
 -- Returns up to `limit` Book records from ReadHistory.hist, in order
 -- (ReadHistory keeps hist sorted newest-first already).
+-- The lastfile (currently-reading book shown in the hero card) is skipped so
+-- it doesn't appear both as the hero and as Recent slot 1.
 
 function Repo.getRecent(limit)
-    local rh  = getReadHistory()
+    local rh       = getReadHistory()
+    local lastfile = G_reader_settings:readSetting("lastfile")
     local out = {}
-    for i = 1, math.min(limit or 8, #rh.hist) do
+    -- Iterate hist; skip the lastfile entry (already shown in the hero card).
+    -- Stop once we have `limit` items.
+    for i = 1, #rh.hist do
         local entry = rh.hist[i]
-        local book  = Repo.buildBook(entry.file)
-        if book then
-            book.last_read_time = entry.time
-            out[#out + 1] = book
+        if entry.file ~= lastfile then
+            local book = Repo.buildBook(entry.file)
+            if book then
+                book.last_read_time = entry.time
+                out[#out + 1] = book
+                if #out >= (limit or 8) then break end
+            end
         end
     end
     return out

@@ -332,7 +332,16 @@ function BookshelfWidget:_chipTotal()
     -- omits the total.
     if self.chip == "recent" then
         local rh = require("readhistory")
-        return #rh.hist
+        local lastfile = G_reader_settings:readSetting("lastfile")
+        local total = #rh.hist
+        -- Mirror getRecent's dedup: lastfile is shown as the hero, so it doesn't
+        -- count toward the Recent shelf total.
+        if lastfile then
+            for _i, entry in ipairs(rh.hist) do
+                if entry.file == lastfile then total = total - 1; break end
+            end
+        end
+        return total
     elseif self.chip == "latest" then
         return -1
     elseif self.chip == "series" then

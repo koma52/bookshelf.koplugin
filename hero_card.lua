@@ -130,23 +130,44 @@ function HeroCard:_renderFull()
         -- BookInfoManager stores the raw <dc:description> with embedded
         -- HTML markup (<p><b><i><br>…). TextBoxWidget has no markup
         -- renderer so we strip tags + decode the most common entities.
-        desc = desc:gsub("<br%s*/?>", "\n")     -- preserve line breaks
-                   :gsub("</p>", "\n\n")        -- paragraph breaks
-                   :gsub("<[^>]+>", "")         -- drop all other tags
-                   :gsub("&amp;",  "&")
-                   :gsub("&quot;", "\"")
-                   :gsub("&apos;", "'")
-                   :gsub("&lt;",   "<")
-                   :gsub("&gt;",   ">")
-                   :gsub("&#(%d+);", function(n) return string.char(tonumber(n)) end)
-                   :gsub("^%s+", ""):gsub("%s+$", "")  -- trim
+        --
+        -- &#NNN; entities can be out-of-ASCII codepoints (e.g. 8217 for
+        -- a right single quote) — string.char only handles 0-255 and
+        -- raises on larger values. The codepointToUtf8 helper produces
+        -- valid multi-byte UTF-8 instead, falling back to empty for
+        -- malformed inputs.
+        local function codepointToUtf8(n)
+            n = tonumber(n)
+            if not n or n < 0 then return "" end
+            if n < 0x80    then return string.char(n) end
+            if n < 0x800   then return string.char(0xC0 + math.floor(n / 0x40),
+                                                   0x80 + n % 0x40) end
+            if n < 0x10000 then return string.char(0xE0 + math.floor(n / 0x1000),
+                                                   0x80 + math.floor(n / 0x40) % 0x40,
+                                                   0x80 + n % 0x40) end
+            return ""
+        end
+        desc = desc:gsub("<br%s*/?>", "\n")
+                   :gsub("</p>",     "\n\n")
+                   :gsub("<[^>]+>",  "")
+                   :gsub("&amp;",    "&")
+                   :gsub("&quot;",   "\"")
+                   :gsub("&apos;",   "'")
+                   :gsub("&lt;",     "<")
+                   :gsub("&gt;",     ">")
+                   :gsub("&#(%d+);", codepointToUtf8)
+                   :gsub("^%s+", ""):gsub("%s+$", "")
         if desc ~= "" then
             right_top[#right_top + 1] = VerticalSpan:new{ width = Size.padding.large }
+            -- Allow the blurb to consume up to ~65% of the cover height so it
+            -- isn't truncated after a couple of lines. Bottom-anchored stack
+            -- (progress bar + clock) still has room because they sit in the
+            -- BottomContainer, which is independent of the TopContainer flow.
             right_top[#right_top + 1] = TextBoxWidget:new{
                 text   = desc,
                 face   = Font:getFace("infofont", 14),
                 width  = right_w,
-                height = math.floor(cover_h * 0.40),
+                height = math.floor(cover_h * 0.65),
                 height_overflow_show_ellipsis = true,
             }
         end
@@ -172,15 +193,16 @@ function HeroCard:_renderFull()
             margin_h   = 0,
             margin_v   = 0,
         }
+        -- [N%  bar] — percentage on the LEFT, then standard padding, then bar.
         right_bottom_items[#right_bottom_items + 1] = HorizontalGroup:new{
             align = "center",
-            bar,
-            HorizontalSpan:new{ width = gap },
             pct_widget,
+            HorizontalSpan:new{ width = Size.padding.default },
+            bar,
         }
     end
 
-    -- Clock + battery — left-aligned, modest size (matches author font).
+    -- Clock + battery — right-aligned, modest size (matches author font).
     local time_str = os.date("%I:%M %p"):gsub("^0", "")
     local batt_str = ""
     local s = self.device_state
@@ -192,7 +214,7 @@ function HeroCard:_renderFull()
         text      = clock_text,
         face      = Font:getFace("infofont", 16),
         width     = right_w,
-        alignment = "left",
+        alignment = "right",
     }
     local right_bottom = VerticalGroup:new{
         align = "left",

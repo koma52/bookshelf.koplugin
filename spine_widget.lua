@@ -54,7 +54,9 @@ function SpineWidget:_renderFallback()
     local VerticalGroup = require("ui/widget/verticalgroup")
     local Font = require("ui/font")
     local Blitbuffer = require("ffi/blitbuffer")
-    local pad = Size.padding.small
+    -- More breathing room around fallback title text — previously pad.small (2dp)
+    -- was too tight against the slot edges.
+    local pad = Size.padding.large
 
     local title = TextBoxWidget:new{
         text = self.book and self.book.title or "?",

@@ -50,13 +50,18 @@ local SpineWidget = InputContainer:extend{
     height      = nil,
     on_tap      = nil,
     on_hold     = nil,
-    -- When true (default), the cover image is stretched to exactly fill
-    -- (width, height) — CSS `object-fit: fill`. When false, the image is
-    -- scaled with aspect ratio preserved (CSS `contain`); the hero card
-    -- uses this to avoid the line-stripe corruption that the stretched
-    -- path can produce when the cached cover_bb is at a different aspect
-    -- than the slot.
-    cover_fill  = true,
+    -- Cover rendering mode. Mutually exclusive:
+    --   cover_fill   = true (default)  → stretch to fill (object-fit: fill)
+    --   cover_native = true            → render bb at its native size,
+    --                                   center in the slot (no scaling).
+    --                                   Hero card uses this — bypasses
+    --                                   RenderImage:scaleBlitBuffer entirely
+    --                                   to dodge the stripe-corruption seen
+    --                                   on Kindle when scaling.
+    --   neither                        → aspect-preserving fit
+    --                                   (object-fit: contain, scale_factor=0)
+    cover_fill   = true,
+    cover_native = false,
 }
 
 function SpineWidget:init()
@@ -105,14 +110,54 @@ end
 
 function SpineWidget:_renderCover()
     local outer, card_w, card_h = self.width, self.width - SHADOW_OFFSET, self.height - SHADOW_OFFSET
+
+    -- Diagnostic logging — track every cover render so we can correlate
+    -- corruption reports with bb dimensions / type / scaling path.
+    local logger = require("logger")
+    local bb = self.book.cover_bb
+    local bb_w  = bb and bb.getWidth  and bb:getWidth()  or "?"
+    local bb_h  = bb and bb.getHeight and bb:getHeight() or "?"
+    local bb_t  = bb and bb.getType   and bb:getType()   or "?"
+    local bb_s  = bb and bb.stride                       or "?"
+    logger.info(string.format(
+        "[bookshelf] cover render: book=%q slot=%dx%d card=%dx%d bb=%sx%s type=%s stride=%s fill=%s",
+        tostring(self.book.title or self.book.filename or "?"),
+        self.width, self.height, card_w, card_h,
+        tostring(bb_w), tostring(bb_h), tostring(bb_t), tostring(bb_s),
+        tostring(self.cover_fill)
+    ))
+
     local img_args = {
         image  = self.book.cover_bb,
         width  = card_w,
         height = card_h,
     }
-    if not self.cover_fill then
-        -- Aspect-preserving fit. Pre-scaled bb avoids the stripey rendering
-        -- artifacts seen on the hero cover with stretched scaling.
+    if self.cover_fill then
+        -- Stretch (CSS object-fit: fill). Default for shelf spines.
+    elseif self.cover_native then
+        -- Render at native bb size with no scaling, then center in the slot.
+        -- Avoids RenderImage:scaleBlitBuffer entirely — the suspected source
+        -- of stripe corruption on the hero. The CenterContainer absorbs the
+        -- size mismatch.
+        img_args.width  = nil
+        img_args.height = nil
+        img_args.scale_factor = 1
+        local img = ImageWidget:new(img_args)
+        local centered = CenterContainer:new{
+            dimen = Geom:new{ w = card_w, h = card_h },
+            img,
+        }
+        local cover = FrameContainer:new{
+            bordersize = CARD_BORDER,
+            radius     = CARD_RADIUS,
+            padding    = 0,
+            width      = card_w,
+            height     = card_h,
+            centered,
+        }
+        return (self:_renderShadowedCard(cover))
+    else
+        -- Aspect-preserving fit (CSS object-fit: contain).
         img_args.scale_factor = 0
     end
     local cover = FrameContainer:new{

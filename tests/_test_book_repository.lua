@@ -112,6 +112,7 @@ end)
 -- ============================================================================
 
 test("getLatest: orders by mtime desc, respects limit and depth", function()
+    Repo.invalidateWalkCache()
     -- Stub a tiny directory walk via the lfs mock above.
     package.loaded["libs/libkoreader-lfs"].dir = function(path)
         local files
@@ -161,6 +162,7 @@ test("getFavorites: pulls from ReadCollection.coll.favorites", function()
 end)
 
 test("getSeriesGroups: groups books by series_name, sorts by latest activity", function()
+    Repo.invalidateWalkCache()
     package.loaded["readhistory"].hist = {
         { file = "/lib/dune.epub", time = 500 },
         { file = "/lib/foundation1.epub", time = 400 },
@@ -248,6 +250,7 @@ test("buildBook: nil authors → nil array (not crash)", function()
 end)
 
 test("getLatest: unreadable directory does not crash the walk", function()
+    Repo.invalidateWalkCache()
     -- Stub lfs.dir so it raises on '/home/badperms' but works on '/home'.
     package.loaded["libs/libkoreader-lfs"].dir = function(path)
         if path == "/home/badperms" then
@@ -283,6 +286,7 @@ test("enrichStats: missing util.partialMD5 → no-op", function()
 end)
 
 test("getSeriesGroups: dedupes books across multiple history entries for the same filepath", function()
+    Repo.invalidateWalkCache()
     package.loaded["readhistory"].hist = {
         { file = "/lib/foundation1.epub", time = 500 },
         { file = "/lib/foundation1.epub", time = 400 },  -- same book, opened earlier
@@ -306,6 +310,34 @@ test("getSeriesGroups: dedupes books across multiple history entries for the sam
     assert(#groups == 1, "expected 1 group, got " .. #groups)
     assert(#groups[1].books == 2, "expected 2 unique books in Foundation, got " .. #groups[1].books)
     assert(groups[1]._seen == nil, "_seen helper should be removed from public shape")
+end)
+
+test("walk cache: second call inside TTL skips lfs.dir; invalidate forces re-walk", function()
+    Repo.invalidateWalkCache()
+    local dir_calls = 0
+    _G._test_settings = { home_dir = "/cached", bookshelf_latest_walk_depth = 1 }
+    _G._test_bim_data = { ["/cached/a.epub"] = { title = "A" } }
+    package.loaded["libs/libkoreader-lfs"].dir = function(path)
+        dir_calls = dir_calls + 1
+        local files = (path == "/cached") and { ".", "..", "a.epub" } or {}
+        local i = 0
+        return function() i = i + 1; return files[i] end
+    end
+    package.loaded["libs/libkoreader-lfs"].attributes = function(_fp, key)
+        if key == "mode" then return "file" end
+        if key == "modification" then return 0 end
+    end
+
+    Repo.getLatest(5)
+    local after_first = dir_calls
+    Repo.getLatest(5)        -- same key inside TTL — should hit cache
+    assert(dir_calls == after_first,
+           "expected cached walk to skip lfs.dir, got " .. (dir_calls - after_first) .. " extra calls")
+
+    Repo.invalidateWalkCache()
+    Repo.getLatest(5)        -- post-invalidate: must re-walk
+    assert(dir_calls > after_first,
+           "expected lfs.dir to be called after invalidate, got 0 extra calls")
 end)
 
 -- ============================================================================

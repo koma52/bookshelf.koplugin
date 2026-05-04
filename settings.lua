@@ -27,6 +27,10 @@ end
 
 local function writeLines(lines)
     G_reader_settings:saveSetting("bookshelf_hero_lines", lines)
+    -- saveSetting is in-memory only; KOReader's flush happens on graceful
+    -- shutdown, which a forced kill / crash misses. Flush eagerly after
+    -- user-paced edits so a subsequent restart can't lose them.
+    G_reader_settings:flush()
 end
 
 -- ─── Toggle helpers ───────────────────────────────────────────────────────────
@@ -388,6 +392,7 @@ function Settings:_editClockLine()
                         G_reader_settings:saveSetting(
                             "bookshelf_clock_line",
                             dialog:getInputText() or "")
+                        G_reader_settings:flush()
                         UIManager:close(dialog)
                     end,
                 },
@@ -410,6 +415,7 @@ function Settings:_pickFontScale()
     local function setValue(v)
         v = math.max(50, math.min(200, v))
         G_reader_settings:saveSetting(key, v)
+        G_reader_settings:flush()
     end
     local function rebuild()
         if Settings._bw and Settings._bw._rebuild then
@@ -467,6 +473,7 @@ function Settings:_pickLatestDepth()
                         .. " Higher values take longer on a cold start."),
         callback   = function(spin)
             G_reader_settings:saveSetting("bookshelf_latest_walk_depth", spin.value)
+            G_reader_settings:flush()
         end,
     })
 end

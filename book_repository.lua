@@ -141,6 +141,23 @@ end
 -- works inside the plugin loader. The unprefixed `require("lfs")` resolves
 -- only in the test harness (where we stub package.loaded.lfs) and fails at
 -- runtime — which is what crashed the chip switch on first use.
+-- ─── Walk cache ──────────────────────────────────────────────────────────────
+-- walkBooks is the dominant cost in BookshelfWidget:_rebuild for any
+-- non-trivial library: a recursive lfs scan plus per-file mtime stats. Both
+-- getLatest and getSeriesGroups call it, and both fire on every chip switch
+-- and page flip. We memoise the candidate list keyed by (home, depth) with a
+-- short TTL so back-to-back rebuilds reuse the work.
+--
+-- Invalidation: TTL covers the steady state. main.lua's onCloseDocument hook
+-- calls Repo.invalidateWalkCache() so a session that closes a book and
+-- returns to Bookshelf picks up any sideloaded / moved files immediately.
+local WALK_CACHE_TTL = 30  -- seconds
+local _walk_cache = {}     -- { [key] = { list = {...}, expires_at = number } }
+
+function Repo.invalidateWalkCache()
+    _walk_cache = {}
+end
+
 local function walkBooks(root, depth, out, current_depth)
     current_depth = current_depth or 0
     if current_depth > depth then return end
@@ -170,11 +187,28 @@ local function walkBooks(root, depth, out, current_depth)
     end
 end
 
+-- Returns a shallow copy of the cached candidate list for (home, depth).
+-- Walks fresh on miss/expiry. The copy is so callers (e.g. getLatest)
+-- can sort in place without mutating the cached canonical order.
+local function cachedWalk(home, depth)
+    local key = (home or "/") .. ":" .. tostring(depth or 0)
+    local now = os.time()
+    local entry = _walk_cache[key]
+    if not entry or entry.expires_at <= now then
+        local fresh = {}
+        walkBooks(home, depth, fresh)
+        entry = { list = fresh, expires_at = now + WALK_CACHE_TTL }
+        _walk_cache[key] = entry
+    end
+    local copy = {}
+    for i = 1, #entry.list do copy[i] = entry.list[i] end
+    return copy
+end
+
 function Repo.getLatest(limit)
     local home       = G_reader_settings:readSetting("home_dir") or "/"
     local depth      = G_reader_settings:readSetting("bookshelf_latest_walk_depth") or 3
-    local candidates = {}
-    walkBooks(home, depth, candidates)
+    local candidates = cachedWalk(home, depth)
     table.sort(candidates, function(a, b) return a.mtime > b.mtime end)
     local out = {}
     for i = 1, math.min(limit or 8, #candidates) do
@@ -234,8 +268,7 @@ function Repo.getSeriesGroups(limit)
 
     local home       = G_reader_settings:readSetting("home_dir") or "/"
     local depth      = G_reader_settings:readSetting("bookshelf_latest_walk_depth") or 3
-    local candidates = {}
-    walkBooks(home, depth, candidates)
+    local candidates = cachedWalk(home, depth)
 
     local groups = {}  -- keyed by series_name
     local order  = {}  -- preserves insertion order for deterministic tie-break

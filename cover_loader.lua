@@ -1,5 +1,5 @@
 -- cover_loader.lua
--- Lazy single-slot loader for HIGH-RESOLUTION cover bbs.
+-- N-slot LRU of HIGH-RESOLUTION cover bbs for the hero card.
 --
 -- Why this exists: BookInfoManager caches a downscaled THUMBNAIL (sized
 -- for the largest shelf cell that ever indexed the file). Painting that
@@ -9,39 +9,55 @@
 -- native resolution (typically 600×900+), so every render becomes a
 -- DOWNSCALE — the safe direction.
 --
--- Single-slot rationale: only one hero is on screen at a time. Holding
--- the most recently requested file's bb is enough to make repeated paints
--- of the same hero free; switching previews evicts and reloads.
+-- Multi-slot rationale: the hero often hosts a back-and-forth between two
+-- or three recently-previewed books (tap shelf cover A → B → A). With a
+-- single slot, A reloaded from disk every time (~100–500 ms for fat EPUBs).
+-- An LRU keyed by filepath makes recently-previewed books re-hero instantly.
 --
--- Lifetime: we OWN the bb (it's not in BookInfoManager's cache). Pass it
--- to ImageWidget with image_disposable=false so the widget never frees it.
--- We free the previous bb when a different filepath is requested, and on
--- explicit clear() (called when the bookshelf widget tears down).
+-- Lifetime: the cache OWNS each bb — it is NOT in BookInfoManager's cache
+-- and won't be freed by anyone else. Pass it to ImageWidget with
+-- image_disposable = false. Eviction frees the bb via bb:free() (FFI
+-- finalizer cleared, memory released immediately). clear() drops everything.
 
 local FileManagerBookInfo = require("apps/filemanager/filemanagerbookinfo")
 local logger              = require("logger")
 
 local CoverLoader = {
-    _cached_path = nil,
-    _cached_bb   = nil,
+    _capacity = 4,     -- ~4 MiB at typical 600×900 grayscale bbs
+    _cache    = {},    -- filepath → bb
+    _order    = {},    -- list of filepaths, oldest at front, MRU at back
 }
 
-function CoverLoader:_release()
-    if self._cached_bb and self._cached_bb.free then
-        pcall(function() self._cached_bb:free() end)
+function CoverLoader:_removeKey(filepath)
+    for i, p in ipairs(self._order) do
+        if p == filepath then
+            table.remove(self._order, i)
+            return
+        end
     end
-    self._cached_bb   = nil
-    self._cached_path = nil
 end
 
--- Returns a high-res cover bb for `filepath`, or nil on failure.
--- May be slow (opens the document) on cache miss; cheap on hit.
+function CoverLoader:_evictIfNeeded()
+    while #self._order > self._capacity do
+        local fp = table.remove(self._order, 1)
+        local bb = self._cache[fp]
+        self._cache[fp] = nil
+        if bb and bb.free then pcall(function() bb:free() end) end
+    end
+end
+
+-- get(filepath) — returns a high-res cover bb, or nil on failure. Hits
+-- are cheap (LRU promotion); misses open the document fresh and may take
+-- 100–500 ms on fat EPUBs.
 function CoverLoader:get(filepath)
     if not filepath or filepath == "" then return nil end
-    if self._cached_path == filepath and self._cached_bb then
-        return self._cached_bb
+
+    local cached = self._cache[filepath]
+    if cached then
+        self:_removeKey(filepath)
+        self._order[#self._order + 1] = filepath
+        return cached
     end
-    self:_release()
 
     -- FileManagerBookInfo:getCoverImage(document, file) — passing nil for
     -- document forces it to open `file` fresh (do_open=true), grab the
@@ -58,16 +74,20 @@ function CoverLoader:get(filepath)
         return nil
     end
 
-    self._cached_path = filepath
-    self._cached_bb   = bb
+    self._cache[filepath] = bb
+    self._order[#self._order + 1] = filepath
+    self:_evictIfNeeded()
     return bb
 end
 
--- Free the cached bb and forget the slot. Call from the bookshelf widget's
--- teardown path (or when the plugin closes) so we don't leak a bb when the
--- user leaves the home screen entirely.
+-- clear — drop everything. Call from plugin teardown if you want the
+-- session's cache memory back before KOReader exits.
 function CoverLoader:clear()
-    self:_release()
+    for _, bb in pairs(self._cache) do
+        if bb and bb.free then pcall(function() bb:free() end) end
+    end
+    self._cache = {}
+    self._order = {}
 end
 
 return CoverLoader

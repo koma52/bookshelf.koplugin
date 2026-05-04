@@ -175,6 +175,7 @@ function Bookshelf:_registerStartWithMenu()
                 end,
                 callback = function()
                     G_reader_settings:saveSetting("start_with", "bookshelf")
+                    G_reader_settings:flush()
                     -- Show Bookshelf immediately if not already showing.
                     if plugin._isShowing and not plugin:_isShowing() then
                         plugin:show()
@@ -337,6 +338,13 @@ end
 -- ---------------------------------------------------------------------------
 
 function Bookshelf:onCloseDocument()
+    -- A closed document is the natural "world may have changed" boundary:
+    -- the user might have sideloaded files, moved books in FM, or just
+    -- finished one whose mtime changed. Drop the walk cache so the next
+    -- rebuild's getLatest / getSeriesGroups see fresh state.
+    local Repo = require("book_repository")
+    if Repo and Repo.invalidateWalkCache then Repo.invalidateWalkCache() end
+
     -- Only re-show Bookshelf if the user is actually returning to "home"
     -- — not if the Reader is closing this document only to immediately open
     -- another. self.ui.document is still set in the latter case.

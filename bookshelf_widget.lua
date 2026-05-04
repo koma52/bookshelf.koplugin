@@ -107,6 +107,19 @@ function BookshelfWidget:handleEvent(event)
     --      FM gets them via the broadcast loop AND via our forward.
     --      Accepted because the relevant broadcast events are idempotent.
     if event.handler == "onGesture" then
+        -- Children first: let our own widget tree (chevron buttons, chip
+        -- strip, hero, shelf covers, swipe zones) consume the gesture
+        -- before falling through to FM. KOReader's normal dispatch is
+        -- parent → child via propagateEvent; an overlay that pre-empts
+        -- with FM zones strips that priority and breaks any third-party
+        -- plugin (e.g. SimpleUI's bottom navbar) that registers FM-level
+        -- zones overlapping our widgets.
+        if InputContainer.handleEvent(self, event) then return true end
+        -- Fallback: gestures we didn't consume (top-edge swipes, corner
+        -- taps from gestures.koplugin profiles, etc.) reach FM via its
+        -- registered touch zones. UIManager only delivers events to the
+        -- topmost widget (us), so without this explicit walk those zones
+        -- would never fire while Bookshelf is up.
         local fm = require("apps/filemanager/filemanager").instance
         local ev = event.args[1]
         local zone_lists = {}
@@ -123,7 +136,7 @@ function BookshelfWidget:handleEvent(event)
                 end
             end
         end
-        return InputContainer.handleEvent(self, event)
+        return false
     end
 
     if InputContainer.handleEvent(self, event) then return true end
@@ -204,33 +217,20 @@ function BookshelfWidget:_rebuild()
     -- otherwise the lastfile-resolved currently-reading book. Tapping the
     -- hero opens whichever book is shown; tapping a shelf cover sets the
     -- preview without opening.
-    local current = self._preview_book or Repo.getCurrent()
-    if current then Repo.enrichStats(current) end
-    -- KOReader doesn't track EPUB page numbers outside an active reader
-    -- session — `last_page` and `pages` are nil for cre documents on the
-    -- home screen — so the page-X-of-Y formula reliably resolves to empty
-    -- on the most common book format. The default line falls back to just
-    -- the percentage. Users with PDF/CBZ libraries (where page counts ARE
-    -- tracked) can still type "%page_num / %page_count · %book_pct" into
-    -- Settings → Edit hero card lines.
-    -- The progress bar already shows the percentage inline, so the default
-    -- detail lines focus on book_time_left and (for PDF/CBZ books that
-    -- expose page numbers) "Page X / Y".
-    local lines = G_reader_settings:readSetting("bookshelf_hero_lines") or {
-        "[if:page_num]Page %page_num / %page_count[/if]",
-        "[if:book_time_left]%book_time_left LEFT[/if]",
-    }
-    local hero = HeroCard:new{
-        book         = current,
-        width        = content_w,
-        height       = hero_h,
-        cover_w      = hero_cover_w,
-        cover_h      = hero_cover_h,
-        pad          = PAD,                     -- single shared gap value
-        lines        = lines,
-        device_state = self:_buildDeviceState(),
-        on_tap       = function(b) self:_openBook(b) end,
-        on_hold      = function(b) self:_openBookMenu(b) end,
+    --
+    -- _buildHero is factored out so _previewBook can swap just the hero into
+    -- the existing tree without rebuilding chips/shelves/pagination — see
+    -- the fast-path in _previewBook below.
+    local hero = self:_buildHero(content_w, hero_cover_w, hero_cover_h, hero_h, PAD)
+    -- Stash dimensions and the hero's parent vgroup so _previewBook can
+    -- rebuild only the hero. Both the populated and empty-state branches
+    -- below set _hero_parent at assembly time.
+    self._hero_dims = {
+        content_w    = content_w,
+        hero_cover_w = hero_cover_w,
+        hero_cover_h = hero_cover_h,
+        hero_h       = hero_h,
+        PAD          = PAD,
     }
 
     -- ── Chip strip ────────────────────────────────────────────────────────────
@@ -315,6 +315,15 @@ function BookshelfWidget:_rebuild()
         }
 
         local VerticalSpan = require("ui/widget/verticalspan")
+        local empty_vgroup = VerticalGroup:new{
+            align = "left",
+            hero,
+            VerticalSpan:new{ width = PAD },
+            chips,
+            VerticalSpan:new{ width = PAD },
+            placeholder,
+        }
+        self._hero_parent = empty_vgroup        -- hero lives at index 1
         self[1] = FrameContainer:new{
             bordersize = 0,
             padding    = PAD,
@@ -323,14 +332,7 @@ function BookshelfWidget:_rebuild()
             -- underlying FileManager doesn't bleed through below the content.
             width      = self.width,
             height     = self.height,
-            VerticalGroup:new{
-                align = "left",
-                hero,
-                VerticalSpan:new{ width = PAD },
-                chips,
-                VerticalSpan:new{ width = PAD },
-                placeholder,
-            },
+            empty_vgroup,
         }
         return
     end
@@ -456,23 +458,25 @@ function BookshelfWidget:_rebuild()
     -- Inner content gets horizontal padding only; the titlebar above does
     -- not, so it spans the full screen width. Vertical PADs come from the
     -- VerticalSpan separators in the inner VerticalGroup.
+    local inner_vgroup = VerticalGroup:new{
+        align = "left",
+        hero,
+        VerticalSpan:new{ width = PAD },
+        chips,
+        VerticalSpan:new{ width = PAD },
+        row_top,
+        VerticalSpan:new{ width = PAD },
+        row_bottom,
+        VerticalSpan:new{ width = PAD },
+        label_widget,
+    }
+    self._hero_parent = inner_vgroup            -- hero lives at index 1
     local inner_content = FrameContainer:new{
         bordersize    = 0,
         padding       = 0,
         padding_left  = PAD,
         padding_right = PAD,
-        VerticalGroup:new{
-            align = "left",
-            hero,
-            VerticalSpan:new{ width = PAD },
-            chips,
-            VerticalSpan:new{ width = PAD },
-            row_top,
-            VerticalSpan:new{ width = PAD },
-            row_bottom,
-            VerticalSpan:new{ width = PAD },
-            label_widget,
-        },
+        inner_vgroup,
     }
 
     self[1] = FrameContainer:new{
@@ -668,17 +672,78 @@ function BookshelfWidget:_openBook(book)
     ReaderUI:showReader(book.filepath)
 end
 
+-- _buildHero — constructs a HeroCard reflecting current preview / lastfile.
+-- Shared between the full _rebuild path and the _previewBook fast path so
+-- both produce structurally-identical heroes.
+function BookshelfWidget:_buildHero(content_w, hero_cover_w, hero_cover_h, hero_h, PAD)
+    local current = self._preview_book or Repo.getCurrent()
+    if current then Repo.enrichStats(current) end
+    -- KOReader doesn't track EPUB page numbers outside an active reader
+    -- session, so the page-X-of-Y formula reliably resolves to empty for
+    -- cre documents. Users with PDF/CBZ libraries (where page counts ARE
+    -- tracked) can still type "%page_num / %page_count · %book_pct" into
+    -- Settings → Edit hero card lines.
+    local lines = G_reader_settings:readSetting("bookshelf_hero_lines") or {
+        "[if:page_num]Page %page_num / %page_count[/if]",
+        "[if:book_time_left]%book_time_left LEFT[/if]",
+    }
+    return HeroCard:new{
+        book         = current,
+        width        = content_w,
+        height       = hero_h,
+        cover_w      = hero_cover_w,
+        cover_h      = hero_cover_h,
+        pad          = PAD,
+        lines        = lines,
+        device_state = self:_buildDeviceState(),
+        on_tap       = function(b) self:_openBook(b) end,
+        on_hold      = function(b) self:_openBookMenu(b) end,
+    }
+end
+
 -- _previewBook(book) — load a shelf book into the hero area as a preview.
 -- The user reads the title/author/description there, then taps the hero
 -- to actually open it. Cleared automatically on chip change; replaced by
 -- another _previewBook call when the user taps a different shelf cover.
+--
+-- Fast path: previewing only changes the hero — chips, shelves, and the
+-- pagination footer are unchanged. If a previous _rebuild has stashed the
+-- hero's parent VerticalGroup, we build a new HeroCard, swap it into
+-- index 1, defer the old hero's free, and dirty the screen. This avoids
+-- 8 SpineWidget reconstructions plus the bb:scale work for any small
+-- covers — perceptible on every shelf-cover tap.
 function BookshelfWidget:_previewBook(book)
     if not book or not book.filepath then return end
-    -- Skip if already previewing this exact book (avoid an unnecessary rebuild).
     if self._preview_book and self._preview_book.filepath == book.filepath then
         return
     end
     self._preview_book = book
+
+    if self._hero_parent and self._hero_dims then
+        local d = self._hero_dims
+        local new_hero = self:_buildHero(
+            d.content_w, d.hero_cover_w, d.hero_cover_h, d.hero_h, d.PAD)
+        local old_hero = self._hero_parent[1]
+        self._hero_parent[1] = new_hero
+        -- VerticalGroup caches its measured size + child offsets; clear so
+        -- the next paint re-measures (defensive — new hero is the same
+        -- height by construction, but resetLayout is cheap).
+        if self._hero_parent.resetLayout then
+            self._hero_parent:resetLayout()
+        end
+        -- Defer the old hero's free to nextTick: the in-flight paint may
+        -- still reference its bbs (mirrors the same-shape protection in
+        -- _rebuild's tree-replacement path).
+        if old_hero and old_hero.free then
+            UIManager:nextTick(function()
+                pcall(function() old_hero:free() end)
+            end)
+        end
+        UIManager:setDirty(self, "ui")
+        return
+    end
+
+    -- Cold path: no live tree to swap into yet. Full rebuild.
     self:_rebuild()
     UIManager:setDirty(self, "ui")
 end
@@ -744,6 +809,7 @@ function BookshelfWidget:_openGearMenu()
                       or  _("Set as home screen"),
                   callback = closing(function()
                     G_reader_settings:saveSetting("start_with", "bookshelf")
+                    G_reader_settings:flush()
                     local ok_notif, Notification = pcall(require, "ui/widget/notification")
                     if ok_notif and Notification then
                         UIManager:show(Notification:new{

@@ -9,6 +9,7 @@
 -- footprint is preserved so adjacent shelf cells don't overlap.
 
 local Blitbuffer      = require("ffi/blitbuffer")
+local ScaledCoverCache = require("scaled_cover_cache")
 local FrameContainer  = require("ui/widget/container/framecontainer")
 local CenterContainer = require("ui/widget/container/centercontainer")
 local TopContainer    = require("ui/widget/container/topcontainer")
@@ -240,11 +241,15 @@ function SpineWidget:_renderCover(bb)
     local bb_w  = bb:getWidth()
     local bb_h  = bb:getHeight()
 
-    -- RenderImage:scaleBlitBuffer corrupts on UPSCALE on Kindle (horizontal
-    -- stripe static); downscale is clean. Hero card avoids this by feeding
-    -- a high-resolution bb via cover_bb (see cover_loader.lua). The branch
-    -- below is a safety net for callers that didn't, or for the rare
-    -- publisher cover that's smaller than the slot.
+    -- RenderImage:scaleBlitBuffer / ImageWidget's internal MuPDF scaler
+    -- corrupts on UPSCALE on Kindle (horizontal stripe static); downscale
+    -- is clean. Hero card avoids this by feeding a high-resolution bb via
+    -- cover_bb (see cover_loader.lua). For the shelf-row case (cover_fill,
+    -- BookInfoManager thumbnail), some publisher-embedded covers are
+    -- smaller than the slot — we upscale them via bb:scale (Lua-side
+    -- nearest neighbour in ffi/blitbuffer.lua) which sidesteps MuPDF
+    -- entirely. KOReader exposes the same escape hatch as the
+    -- legacy_image_scaling user setting; we pick it surgically here.
     local would_upscale = bb_w < img_w or bb_h < img_h
 
     -- Disposable: with the cover_bb override the caller (CoverLoader) owns
@@ -260,7 +265,46 @@ function SpineWidget:_renderCover(bb)
     local img_disposable = (self.cover_bb == nil) or self.cover_bb_disposable
 
     local cover_inner
-    if would_upscale then
+    if would_upscale and self.cover_fill then
+        -- Stretch a small cover to fill the slot. bb:scale is the only
+        -- Kindle-safe upscale path (sidesteps MuPDF's broken scaler) but
+        -- a ~111k pixel-op pass per render — cache by filepath so chip
+        -- switches and page flips that keep the same book on screen reuse
+        -- the work. ScaledCoverCache owns the scaled bb's lifetime; we
+        -- pass image_disposable=false so ImageWidget doesn't fight it.
+        local fp = self.book and self.book.filepath
+        local cached = ScaledCoverCache:get(fp, img_w, img_h)
+        if cached then
+            -- Source bb isn't needed; release if we owned it.
+            if img_disposable then bb:free() end
+            cover_inner = ImageWidget:new{
+                image            = cached,
+                image_disposable = false,
+                scale_factor     = 1,
+            }
+        else
+            local scaled_bb = bb:scale(img_w, img_h)
+            if img_disposable then bb:free() end
+            if fp then
+                ScaledCoverCache:put(fp, img_w, img_h, scaled_bb)
+                cover_inner = ImageWidget:new{
+                    image            = scaled_bb,
+                    image_disposable = false,    -- cache owns lifetime
+                    scale_factor     = 1,
+                }
+            else
+                -- No filepath to key on (rare). Hand ownership to the
+                -- ImageWidget so the bb is freed at widget teardown.
+                cover_inner = ImageWidget:new{
+                    image            = scaled_bb,
+                    image_disposable = true,
+                    scale_factor     = 1,
+                }
+            end
+        end
+    elseif would_upscale then
+        -- cover_fill=false (aspect-preserving): keep the bb at native
+        -- size and centre it. No scaling = no corruption risk.
         cover_inner = CenterContainer:new{
             dimen = Geom:new{ w = img_w, h = img_h },
             ImageWidget:new{

@@ -1,8 +1,9 @@
 -- hero_line_editor.lua
--- Per-region line editor for the hero card. Mirrors the bookends
--- editor's snapshot/live-preview/cancel pattern: snapshot the active
--- region on open, mutate G_reader_settings on every edit, restore on
--- cancel, leave-as-is on save.
+-- Per-region line editor for the hero card. Live preview is driven by
+-- an in-memory `draft` table — settings are NOT written on every edit
+-- (that would flush to disk on every keystroke and chew Kindle flash).
+-- Settings are persisted only on Save; Cancel restores from the
+-- entry-time snapshot as a safety net in case anything else wrote.
 
 local InputDialog = require("ui/widget/inputdialog")
 local UIManager   = require("ui/uimanager")
@@ -19,8 +20,8 @@ function LineEditor.show(region_key, bw, settings_module)
     local snapshot = Regions.snapshot(region_key)
     local current  = Regions.read()[region_key]
 
-    -- Local mutable copy of the region; persisted via Regions.write on each
-    -- live preview pass, so a rebuild reads the current draft.
+    -- In-memory draft. Mutated on every keystroke / button tap; written
+    -- to settings only on Save.
     local draft = {
         template  = current.template,
         font_face = current.font_face,
@@ -34,17 +35,24 @@ function LineEditor.show(region_key, bw, settings_module)
 
     local dialog
 
+    -- Build a fully-populated regions table for the renderer: the four
+    -- inactive regions come from Regions.read() (i.e. stored values), the
+    -- active region is the current draft. No settings write happens here.
+    local function previewRegions()
+        local regions = Regions.read()
+        regions[region_key] = draft
+        return regions
+    end
+
     local function applyLivePreview()
-        Regions.write(region_key, draft)
         if bw and bw._swapHeroRightColumnInPlace then
-            bw:_swapHeroRightColumnInPlace(Regions.read())
+            bw:_swapHeroRightColumnInPlace(previewRegions())
         end
     end
 
     local function commitText()
         local text = dialog and dialog:getInputText() or draft.template
         draft.template = text or ""
-        applyLivePreview()
     end
 
     local function buildButtons()
@@ -55,6 +63,9 @@ function LineEditor.show(region_key, bw, settings_module)
                 text     = _("Cancel"),
                 id       = "close",
                 callback = function()
+                    -- Safety net: even though we never wrote during the
+                    -- session, restore the snapshot in case something else
+                    -- did. Then repaint with the now-stored values.
                     Regions.restore(region_key, snapshot)
                     if bw and bw._swapHeroRightColumnInPlace then
                         bw:_swapHeroRightColumnInPlace(Regions.read())
@@ -73,7 +84,6 @@ function LineEditor.show(region_key, bw, settings_module)
             {
                 text     = _("Default"),
                 callback = function()
-                    -- Reset draft to defaults, reflect in dialog text.
                     local d = Regions.DEFAULTS[region_key]
                     draft.template  = d.template
                     draft.font_face = d.font_face
@@ -94,6 +104,7 @@ function LineEditor.show(region_key, bw, settings_module)
                 is_enter_default = true,
                 callback         = function()
                     commitText()
+                    Regions.write(region_key, draft)
                     UIManager:close(dialog)
                 end,
             },
@@ -106,7 +117,6 @@ function LineEditor.show(region_key, bw, settings_module)
         input           = draft.template,
         allow_newline   = true,
         edited_callback = function()
-            if not dialog then return end
             local live = dialog:getInputText()
             if live ~= nil then
                 draft.template = live

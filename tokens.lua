@@ -32,6 +32,7 @@ Tokens.CATALOGUE = {
     { category = "Book",     token = "%series_num",       description = "Series number" },
     { category = "Book",     token = "%filename",         description = "File name" },
     { category = "Book",     token = "%format",           description = "Format (EPUB/PDF/…)" },
+    { category = "Book",     token = "%description",      description = "Book blurb (HTML stripped)" },
     { category = "Book",     token = "%lang",             description = "Language" },
     { category = "Progress", token = "%book_pct",         description = "Percent read" },
     { category = "Progress", token = "%book_pct_left",    description = "Percent left" },
@@ -84,6 +85,37 @@ Tokens.expanders.series_num  = metaToken("series_num")
 Tokens.expanders.filename    = metaToken("filename")
 Tokens.expanders.lang        = metaToken("lang")
 Tokens.expanders.format      = metaToken("format")
+
+local function codepointToUtf8(n)
+    n = tonumber(n)
+    if not n or n < 0 then return "" end
+    if n < 0x80    then return string.char(n) end
+    if n < 0x800   then return string.char(0xC0 + math.floor(n / 0x40),
+                                           0x80 + n % 0x40) end
+    if n < 0x10000 then return string.char(0xE0 + math.floor(n / 0x1000),
+                                           0x80 + math.floor(n / 0x40) % 0x40,
+                                           0x80 + n % 0x40) end
+    return ""
+end
+
+local function cleanDescription(raw)
+    if not raw or raw == "" then return "" end
+    return (raw:gsub("<br%s*/?>", "\n")
+               :gsub("</p>",     "\n\n")
+               :gsub("<[^>]+>",  "")
+               :gsub("&amp;",    "&")
+               :gsub("&quot;",   "\"")
+               :gsub("&apos;",   "'")
+               :gsub("&lt;",     "<")
+               :gsub("&gt;",     ">")
+               :gsub("&#(%d+);", codepointToUtf8)
+               :gsub("^%s+", ""):gsub("%s+$", ""))
+end
+
+Tokens.cleanDescription = cleanDescription      -- exported for tests / ad-hoc use
+Tokens.expanders.description = function(book)
+    return book and cleanDescription(book.description) or ""
+end
 
 local function pct(v) return string.format("%d%%", math.floor((v or 0) * 100 + 0.5)) end
 

@@ -200,5 +200,45 @@ test("bar: %bar expands to empty (deferred to renderer)", function()
     eq(Tokens.expand("%bar", bookFixture()), "")
 end)
 
+test("description: empty when book has no blurb", function()
+    local b = bookFixture(); b.description = nil
+    eq(Tokens.expand("%description", b), "")
+end)
+
+test("description: passes plain text through", function()
+    local b = bookFixture(); b.description = "A novel about sandworms."
+    eq(Tokens.expand("%description", b), "A novel about sandworms.")
+end)
+
+test("description: strips HTML tags", function()
+    local b = bookFixture(); b.description = "<p>Hello <b>world</b>.</p>"
+    eq(Tokens.expand("%description", b), "Hello world.")
+end)
+
+test("description: <br> becomes newline", function()
+    local b = bookFixture(); b.description = "Line one<br/>Line two"
+    eq(Tokens.expand("%description", b), "Line one\nLine two")
+end)
+
+test("description: </p> becomes blank line", function()
+    local b = bookFixture(); b.description = "<p>One</p><p>Two</p>"
+    eq(Tokens.expand("%description", b), "One\n\nTwo")
+end)
+
+test("description: decodes named entities", function()
+    local b = bookFixture(); b.description = "Tom &amp; Jerry &lt;3"
+    eq(Tokens.expand("%description", b), "Tom & Jerry <3")
+end)
+
+test("description: decodes numeric entity to UTF-8", function()
+    local b = bookFixture(); b.description = "It&#8217;s good"
+    eq(Tokens.expand("%description", b), "It\xE2\x80\x99s good")
+end)
+
+test("description: trims surrounding whitespace", function()
+    local b = bookFixture(); b.description = "   leading and trailing   "
+    eq(Tokens.expand("%description", b), "leading and trailing")
+end)
+
 io.write(string.format("\n%d passed, %d failed\n", pass, fail))
 os.exit(fail == 0 and 0 or 1)

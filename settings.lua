@@ -6,7 +6,6 @@
 -- All persisted keys use the bookshelf_* prefix.
 
 local InfoMessage  = require("ui/widget/infomessage")
-local InputDialog  = require("ui/widget/inputdialog")
 local Menu         = require("ui/widget/menu")
 local SpinWidget   = require("ui/widget/spinwidget")
 local UIManager    = require("ui/uimanager")

@@ -761,6 +761,23 @@ function BookshelfWidget:_swapHeroInPlace()
     UIManager:setDirty(self, "ui")
 end
 
+-- Live-preview hook used by the hero line editor. Rebuilds only the
+-- right OverlapGroup of the current HeroCard from the supplied regions
+-- table (so we don't pay the cover BIM re-fetch on every keystroke).
+-- Returns true if the swap happened, false if the live tree isn't there.
+function BookshelfWidget:_swapHeroRightColumnInPlace(regions)
+    if not self._hero_parent then return false end
+    local hero = self._hero_parent[1]
+    if not hero or not hero.replaceRightColumn then return false end
+    local current = self._preview_book or (Repo.getCurrent and Repo.getCurrent()) or hero.book
+    if current and Repo.enrichStats then
+        Repo.enrichStats(current)
+    end
+    local ok = hero:replaceRightColumn(regions, current, self:_buildDeviceState())
+    if ok then UIManager:setDirty(self, "fast") end
+    return ok
+end
+
 -- _previewBook(book) — load a shelf book into the hero area as a preview.
 -- The user reads the title/author/description there, then taps the hero
 -- to actually open it. Cleared automatically on chip change; replaced by

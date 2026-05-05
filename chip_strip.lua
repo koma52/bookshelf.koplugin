@@ -52,9 +52,6 @@ local ChipStrip = InputContainer:extend{
     on_breadcrumb     = nil,   -- function(depth) — breadcrumb mode tap
 }
 
-local CHEVRON      = " \xE2\x80\xBA "  -- " ‹ " — actually › U+203A
-local ELLIPSIS     = "\xE2\x80\xA6"     -- …
-
 -- Breadcrumb pill rendered as a black-outlined tag (white interior) with
 -- an arrow tip on the right. The arrow doubles as the leading chevron —
 -- no separate "›" needed after it. Sized to the label's text width plus a
@@ -214,112 +211,61 @@ end
 -- resolves) so the existing tap pipeline keeps working in both modes.
 
 function ChipStrip:_initBreadcrumb()
-    -- Match the chip-label size (16) so the breadcrumb reads as
-    -- continuous with the chip pill rather than a smaller subtitle.
-    -- The crumb is doubling as the heading for the drilled-in view
-    -- (e.g. series title), so a heading-equivalent weight matters.
-    local face_text  = Font:getFace("infofont", 16)
-    local face_chev  = Font:getFace("infofont", 16)
-    -- Pill width hugs the label text + arrow tip; no longer a fixed
-    -- quarter-width slot. Tap zone covers body+tip — anywhere on the
-    -- pill pops back to top level. tip_w is reused below to size the
-    -- gap between the arrow and the first crumb so the visual rhythm
-    -- of the arrow's lead-in is balanced by an equal trail-out.
+    -- Each crumb in the path is its own arrow-pill (same outlined style
+    -- as the chip pill) — chained breadcrumb of "tabs" rather than a
+    -- chip pill followed by chevron-separated text. Tap any pill to
+    -- pop to that depth.
+    local face_text = Font:getFace("infofont", 16)
+
+    -- Chip pill at depth 0 (e.g. "HOME").
     local pill, pill_w, pill_tip_w = arrowPillFrame(self.chip_pill_label or "", self.height)
-    self._breadcrumb_zones = {
-        { x = 0, w = pill_w, depth = 0 },
-    }
-    local row = HorizontalGroup:new{ pill }
 
-    -- Helper: append a chevron + a tappable label, growing the cumulative
-    -- x range and recording a tap zone for the given depth.
-    local cursor_x = pill_w
-    local function append_chevron()
-        local sep = HorizontalSpan:new{ width = Size.padding.small }
-        local chev = TextWidget:new{
-            text    = CHEVRON,
-            face    = face_chev,
-            fgcolor = Blitbuffer.gray(0.4),
-        }
-        local sep2 = HorizontalSpan:new{ width = Size.padding.small }
-        row[#row + 1] = sep
-        row[#row + 1] = chev
-        row[#row + 1] = sep2
-        cursor_x = cursor_x + Size.padding.small + chev:getSize().w + Size.padding.small
-    end
-    local function append_label(text, depth)
-        local tw = TextWidget:new{
-            text    = text,
-            face    = face_text,
-            bold    = true,
-            fgcolor = Blitbuffer.COLOR_BLACK,
-        }
-        local lw = tw:getSize().w
-        row[#row + 1] = tw
-        self._breadcrumb_zones[#self._breadcrumb_zones + 1] = {
-            x = cursor_x, w = lw, depth = depth,
-        }
-        cursor_x = cursor_x + lw
-    end
-
-    -- Truncate-from-left: try the full path first; if it overflows,
-    -- keep the deepest crumb and replace older ones with a single
-    -- "…" entry until it fits or only the deepest remains.
-    local function build_with_path(visible_path, leading_ellipsis)
-        row = HorizontalGroup:new{ pill }
-        self._breadcrumb_zones = { { x = 0, w = pill_w, depth = 0 } }
-        cursor_x = pill_w
-        -- Gap right after the arrow tip equal to tip_w — the arrow IS
-        -- the leading chevron, so no "›" between pill and first item;
-        -- matching the gap to the tip width keeps the visual rhythm
-        -- balanced (arrow lead-in distance ≈ trail-out distance).
-        local lead_gap = pill_tip_w
-        row[#row + 1] = HorizontalSpan:new{ width = lead_gap }
-        cursor_x = cursor_x + lead_gap
-        local items_in = 0
-        if leading_ellipsis then
-            local tw = TextWidget:new{
-                text    = ELLIPSIS,
-                face    = face_text,
-                fgcolor = Blitbuffer.gray(0.4),
-            }
-            local lw = tw:getSize().w
-            row[#row + 1] = tw
-            -- No tap zone for the ellipsis — it's an indicator, not a target.
-            cursor_x = cursor_x + lw
-            items_in = 1
-        end
-        for _, crumb in ipairs(visible_path) do
-            if items_in > 0 then append_chevron() end
-            append_label(crumb.label or "", crumb._original_depth)
-            items_in = items_in + 1
-        end
-        return cursor_x  -- total width consumed
-    end
-
-    -- Each path entry needs its original-depth so a truncated-out
-    -- middle crumb's tap (if it ever became tappable again) would
-    -- pop to the right depth. We only render visible ones, but we
-    -- preserve original depth on each.
-    local annotated = {}
+    -- Build a pill for each crumb. Strip a trailing "/" defensively in
+    -- case the upstream label still carries one.
+    local crumb_pills = {}
     for i, p in ipairs(self.breadcrumb_path) do
-        annotated[i] = { label = p.label, _original_depth = i }
+        local label = (p.label or ""):gsub("/$", "")
+        local cp_widget, cp_w, cp_tip_w = arrowPillFrame(label, self.height)
+        crumb_pills[#crumb_pills + 1] = {
+            widget = cp_widget,
+            width  = cp_w,
+            tip_w  = cp_tip_w,
+            depth  = i,
+        }
     end
 
-    local visible = annotated
-    local leading_ellipsis = false
-    local total_w = build_with_path(visible, leading_ellipsis)
+    -- Layout: chip_pill, gap, crumb_pill, gap, crumb_pill, ...
+    -- Gap between pills is the tip width of the previous pill — the
+    -- arrow tip points "into" the next pill at a balanced offset.
+    local function build(visible_crumbs)
+        local row    = HorizontalGroup:new{ pill }
+        local zones  = { { x = 0, w = pill_w, depth = 0 } }
+        local cursor = pill_w
+        local prev_tip = pill_tip_w
+        for _, cp in ipairs(visible_crumbs) do
+            row[#row + 1] = HorizontalSpan:new{ width = prev_tip }
+            cursor = cursor + prev_tip
+            row[#row + 1] = cp.widget
+            zones[#zones + 1] = { x = cursor, w = cp.width, depth = cp.depth }
+            cursor = cursor + cp.width
+            prev_tip = cp.tip_w
+        end
+        return row, zones, cursor
+    end
+
+    -- Truncate from the front (drop earliest crumbs first) until the
+    -- chain fits the strip's width. The chip pill + the deepest crumb
+    -- always survive. If even those two don't fit there's no clean
+    -- truncation point — the deepest pill renders past the right edge
+    -- but tap zones still work for the chip pill at depth 0.
+    local visible = crumb_pills
+    local row, zones, total_w = build(visible)
     while total_w > self.width and #visible > 1 do
-        -- Drop the SECOND visible crumb (keep deepest); switch to
-        -- leading-ellipsis mode after the first drop.
         table.remove(visible, 1)
-        leading_ellipsis = true
-        total_w = build_with_path(visible, leading_ellipsis)
+        row, zones, total_w = build(visible)
     end
-    -- If even the chip pill + (ellipsis) + deepest crumb overflows,
-    -- there's no clean truncation point — the deepest crumb's TextWidget
-    -- will overflow visually, but tap zones still work.
 
+    self._breadcrumb_zones = zones
     self[1] = row
 end
 

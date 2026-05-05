@@ -375,7 +375,7 @@ end
 function Settings:_chipsSubItems()
     local CHIP_ORDER  = { "all", "recent", "latest", "series", "favorites" }
     local CHIP_LABELS = {
-        all       = _("All"),
+        all       = _("Home"),
         recent    = _("Recent"),
         latest    = _("Latest"),
         series    = _("Series"),

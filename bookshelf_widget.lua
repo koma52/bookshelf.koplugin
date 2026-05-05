@@ -223,7 +223,7 @@ function BookshelfWidget:_rebuild()
     -- (so the user can navigate back via the breadcrumb), even if every
     -- chip is disabled.
     local CHIP_LABELS = {
-        all = "All", recent = "Recent", latest = "Latest",
+        all = "Home", recent = "Recent", latest = "Latest",
         series = "Series", favorites = "Favourites",
     }
     -- "All" leads (folder-aware browse rooted at home_dir, honours the
@@ -1560,9 +1560,14 @@ end
 
 function BookshelfWidget:_expandFolder(folder)
     if not folder or not folder.path then return end
+    -- FileChooser sometimes appends a trailing slash to the item.text;
+    -- strip it before drilling in so the breadcrumb pill renders the
+    -- folder name cleanly.
+    local label = folder.label or folder.path:match("([^/]+)$") or folder.path
+    label = label:gsub("/$", "")
     self:_drillInto{
         kind    = "folder",
-        label   = folder.label or folder.path:match("([^/]+)$") or folder.path,
+        label   = label,
         payload = { path = folder.path, first_book = folder.first_book },
     }
 end

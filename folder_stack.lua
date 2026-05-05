@@ -40,22 +40,19 @@ local Blitbuffer     = require("ffi/blitbuffer")
 local Screen         = require("device").screen
 local SpineWidget    = require("spine_widget")
 
--- Drop-shadow offset (matches SpineWidget so adjacent magazine and book
--- spines on the same shelf have identical depth treatment).
-local SHADOW_OFFSET   = Screen:scaleBySize(4)
-local SHADOW_GRAY     = Blitbuffer.gray(0.5)
+-- Slope geometry as fractions of slot height. The slope DROPS going
+-- left-to-right (y_left < y_right), so the back wall is on the LEFT
+-- (taller) and the front wall is on the RIGHT (shorter, magazine
+-- "opening" lip). Book visible above the slope, cardboard fill below.
+local SLOPE_LEFT_FRAC  = 0.30   -- y at left edge (high point of slope, back wall top)
+local SLOPE_RIGHT_FRAC = 0.55   -- y at right edge (low point of slope, front wall top)
 
--- Slope geometry as fractions of card height. The slope rises going
--- left-to-right (y_left > y_right), so the back wall is on the RIGHT
--- (taller) and the front wall is on the LEFT (shorter, magazine
--- "opening" lip). Matches the reference photo's orientation. Book is
--- visible above the slope, cardboard fill below.
-local SLOPE_LEFT_FRAC  = 0.55   -- y at left edge (low point of slope)
-local SLOPE_RIGHT_FRAC = 0.30   -- y at right edge (high point of slope)
-
--- Cardboard colour and a slightly-darker outline.
-local CARDBOARD       = Blitbuffer.gray(0.25)
-local CARDBOARD_EDGE  = Blitbuffer.gray(0.50)
+-- Cardboard colour and a darker outline. Slightly denser than the
+-- earlier values so the magazine reads as a solid object on the page
+-- now that the drop shadow has been removed (see init below for the
+-- composition; shadow was making the shape look 1-D rather than 3-D).
+local CARDBOARD       = Blitbuffer.gray(0.30)
+local CARDBOARD_EDGE  = Blitbuffer.gray(0.65)
 local PAGE_BG         = Blitbuffer.COLOR_WHITE
 
 -- Bottom-corner rounding (matches SpineWidget's CARD_RADIUS so adjacent
@@ -64,12 +61,11 @@ local PAGE_BG         = Blitbuffer.COLOR_WHITE
 -- junctions, sharp by design in a real magazine file.
 local CARD_RADIUS = Screen:scaleBySize(4)
 
--- Book inset (fractions of card dimensions). Tiny — just enough that the
--- magazine's cardboard wraps the book by a few pixels on each side and
--- the top, reading as "book inside the file" without the book visibly
--- shrinking.
-local BOOK_INSET_X_FRAC   = 0.03
-local BOOK_INSET_TOP_FRAC = 0.02
+-- Book inset in absolute pixels. Just enough that a thin band of
+-- cardboard wraps the book on each side and the top — the book "barely
+-- fits inside" the file rather than shrinking visibly inside it.
+local BOOK_INSET_X = Screen:scaleBySize(3)
+local BOOK_INSET_Y = Screen:scaleBySize(2)
 
 -- Painter for the magazine polygon: cardboard filled below a sloped top
 -- edge, with rounded BOTTOM corners (top corners stay angular — they're
@@ -177,21 +173,25 @@ local FolderStack = InputContainer:extend{
 
 function FolderStack:init()
     self.dimen = Geom:new{ w = self.width, h = self.height }
-    local card_w = self.width  - SHADOW_OFFSET
-    local card_h = self.height - SHADOW_OFFSET
+    -- No drop shadow on folders — the previous shadow read as "flat
+    -- shape with shadow" rather than "3D file on the page". A darker
+    -- cardboard fill plus the perimeter outline carry the solidity
+    -- without extra layering. Folder fills the full slot (book covers
+    -- still leave SHADOW_OFFSET space for their own shadows; the
+    -- folder doesn't need that allocation).
+    local card_w = self.width
+    local card_h = self.height
 
     -- Slope endpoints in card-local coordinates.
     local y_left  = math.floor(card_h * SLOPE_LEFT_FRAC)
     local y_right = math.floor(card_h * SLOPE_RIGHT_FRAC)
 
-    -- Book layer: SpineWidget for the first book, inset within the card.
-    -- The book's bottom extends to the card bottom and is hidden by the
-    -- magazine's cardboard fill below the slope; only the top portion
-    -- (above the slope) is visible.
-    local inset_x = math.floor(card_w * BOOK_INSET_X_FRAC)
-    local inset_y = math.floor(card_h * BOOK_INSET_TOP_FRAC)
-    local book_w  = card_w - inset_x * 2
-    local book_h  = card_h - inset_y
+    -- Book layer: SpineWidget for the first book, inset within the card
+    -- by a few pixels on every side. The book's bottom extends to the
+    -- card bottom and is hidden by the magazine's cardboard fill below
+    -- the slope; only the top portion (above the slope) is visible.
+    local book_w = card_w - BOOK_INSET_X * 2
+    local book_h = card_h - BOOK_INSET_Y
     local book_widget
     if self.folder and self.folder.first_book then
         book_widget = SpineWidget:new{
@@ -211,36 +211,12 @@ function FolderStack:init()
             is_selected = self.is_selected,
         }
     end
-    -- Pad the book into position within the card (top + sides; bottom is
-    -- naturally hidden because book_h < card_h is unbounded — we extended
-    -- it to card_h - inset_y, so book reaches the bottom of the card).
     local book_positioned = FrameContainer:new{
         bordersize    = 0,
         padding       = 0,
-        padding_top   = inset_y,
-        padding_left  = inset_x,
+        padding_top   = BOOK_INSET_Y,
+        padding_left  = BOOK_INSET_X,
         book_widget,
-    }
-
-    -- Drop shadow: same polygon as the magazine front, painted in
-    -- SHADOW_GRAY at offset (SHADOW_OFFSET, SHADOW_OFFSET). Visible as
-    -- an L-shape on the magazine's bottom-right plus a band along the
-    -- slope's underside. Same radius so its rounded corners track the
-    -- front shape's corners.
-    local shadow_poly = MagazinePolygon:new{
-        width      = card_w,
-        height     = card_h,
-        y_left     = y_left,
-        y_right    = y_right,
-        fill_color = SHADOW_GRAY,
-        radius     = CARD_RADIUS,
-    }
-    local shadow_positioned = FrameContainer:new{
-        bordersize    = 0,
-        padding       = 0,
-        padding_top   = SHADOW_OFFSET,
-        padding_left  = SHADOW_OFFSET,
-        shadow_poly,
     }
 
     -- Magazine front: cardboard fill in front of the book, rounded
@@ -306,10 +282,9 @@ function FolderStack:init()
 
     self[1] = OverlapGroup:new{
         dimen = self.dimen,
-        shadow_positioned,    -- 1: drop shadow at offset
-        book_positioned,      -- 2: book cover, inset within card
-        magazine,              -- 3: cardboard front (covers book bottom)
-        label_positioned,      -- 4: folder name centred on cardboard
+        book_positioned,       -- 1: book cover, inset within card
+        magazine,              -- 2: cardboard front (covers book bottom)
+        label_positioned,      -- 3: folder name centred on cardboard
     }
     self.ges_events = {
         Tap  = { GestureRange:new{ ges = "tap",  range = self.dimen } },

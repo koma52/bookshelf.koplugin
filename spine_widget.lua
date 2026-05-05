@@ -46,11 +46,13 @@ function ShadowRect:paintTo(bb, x, y)
     bb:paintRoundedRect(x, y, self.width, self.height, SHADOW_GRAY, CARD_RADIUS)
 end
 
--- Border-only overlay used as the selected-state cue. Sits ON TOP of the
--- cover in an OverlapGroup, painting nothing but a thick rounded border at
--- the cover's perimeter. The cover image's pixel position and size are
--- unchanged between selected/unselected — only the perimeter pixels differ
--- — so e-ink doesn't redraw the cover bitmap, just toggles the frame.
+-- Border-only overlay used as the selected-state cue. Sits behind the cover
+-- in an OverlapGroup with dimen matching the cover, but its paintTo draws a
+-- thick rounded border at distance `thickness` OUTSIDE the cover's bounds —
+-- the cover bitmap is never overwritten. The expanded border footprint
+-- intrudes into the slot's right/bottom shadow space and into the
+-- inter-slot gap on left/top; both regions are paper-coloured space that
+-- the bookshelf's "ui" setDirty refresh will clean on de-selection.
 local BorderOverlay = Widget:extend{
     width     = nil,
     height    = nil,
@@ -62,10 +64,19 @@ function BorderOverlay:init()
     self.dimen = Geom:new{ w = self.width, h = self.height }
 end
 function BorderOverlay:paintTo(bb, x, y)
-    bb:paintBorder(x, y, self.width, self.height,
-                   self.thickness,
+    -- paintBorder draws the border on the OUTERMOST T pixels of the
+    -- given rect (going inward). To get the border drawn entirely
+    -- OUTSIDE (x, y, w, h), expand the rect by T on each side and let
+    -- paintBorder eat the outer T from that bigger rect — the inner
+    -- edge of the border lands exactly at our (x, y, w, h) perimeter.
+    -- Outer corner radius = inner radius + T to keep the visual offset
+    -- consistent around the curve.
+    local t = self.thickness
+    bb:paintBorder(x - t, y - t,
+                   self.width + 2 * t, self.height + 2 * t,
+                   t,
                    self.color or Blitbuffer.COLOR_BLACK,
-                   self.radius or 0, true)
+                   (self.radius or 0) + t, true)
 end
 
 -- A card that paints its inner widget (typically an ImageWidget for the

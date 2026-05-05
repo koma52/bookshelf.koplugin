@@ -35,7 +35,7 @@ local CARD_BORDER     = Screen:scaleBySize(1)       -- 1dp border on the card
 -- colour swap (black border → grey shadow) in the same pixel band, with
 -- no change in the slot's outer footprint.
 local SELECTED_BORDER = SHADOW_OFFSET
-local SHADOW_GRAY     = Blitbuffer.gray(0.4)        -- grey level for the shadow
+local SHADOW_GRAY     = Blitbuffer.gray(0.5)        -- grey level for the shadow
 
 -- A simple Widget subclass that paints a rounded rectangle in a fixed grey.
 -- Used as the shadow layer behind every cover. Has its own dimen so

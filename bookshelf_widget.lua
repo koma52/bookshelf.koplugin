@@ -1498,8 +1498,19 @@ end
 function BookshelfWidget:_drillInto(entry)
     if not entry or not entry.kind then return end
     self._drilldown_path[#self._drilldown_path + 1] = entry
+    self.page = 1
+    -- Pre-select the first item of the drilled-in target so the hero
+    -- reflects what the user just tapped (rather than falling back to
+    -- Repo.getCurrent() = lastfile, which is unrelated to the
+    -- drill-in target and reads as "the wrong book leaked in").
+    -- The shelf below shows the same book with a selection border.
     self._preview_book = nil
-    self.page          = 1
+    if entry.kind == "series" and entry.payload and entry.payload.books then
+        local first = entry.payload.books[1]
+        if first and first.filepath then
+            self._preview_book = Repo.buildBook(first.filepath) or first
+        end
+    end
     self:_rebuild()
     UIManager:setDirty(self, "ui")
 end

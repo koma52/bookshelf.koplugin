@@ -40,6 +40,7 @@ local GestureRange   = require("ui/gesturerange")
 local Size           = require("ui/size")
 local Font           = require("ui/font")
 local Blitbuffer     = require("ffi/blitbuffer")
+local Screen         = require("device").screen
 
 local ChipStrip = InputContainer:extend{
     chips             = nil,   -- list of { key, label } (chips mode)
@@ -53,6 +54,32 @@ local ChipStrip = InputContainer:extend{
     on_change         = nil,   -- function(key) — chips mode tap
     on_breadcrumb     = nil,   -- function(depth) — breadcrumb mode tap
 }
+
+-- Small triangular pointer that protrudes ABOVE the chip body, base on
+-- the chip's top edge, apex pointing upward. Used by selected action
+-- chips (currently-reading) so the chip "points at" what it represents
+-- in the hero region above the strip. Same colour as the chip's bg, so
+-- the triangle reads as an extension of the chip's silhouette rather
+-- than a separate marker. Painted via OverlapGroup overlap_offset with
+-- a negative y so the pixels land in the area above the chip strip's
+-- top edge — within the bookshelf widget's bounds, so refreshes work.
+local UpTrianglePointer = require("ui/widget/widget"):extend{
+    width  = nil,
+    height = nil,
+    color  = nil,
+}
+function UpTrianglePointer:init()
+    self.dimen = Geom:new{ w = self.width, h = self.height }
+end
+function UpTrianglePointer:paintTo(bb, x, y)
+    local w, h = self.width, self.height
+    for dy = 0, h - 1 do
+        -- Linear taper: apex (1px wide) at the top, full base at bottom.
+        local row_w   = math.max(1, math.floor(w * (dy + 1) / h + 0.5))
+        local row_off = math.floor((w - row_w) / 2)
+        bb:paintRect(x + row_off, y + dy, row_w, 1, self.color)
+    end
+end
 
 -- Breadcrumb pill rendered as a black-outlined tag (white interior) with
 -- an arrow tip on the right. Pills CHAIN by overlapping the right tip
@@ -265,23 +292,32 @@ function ChipStrip:_initChips()
     local flex_total   = self.width - sep_total - action_w * action_count
     local flex_w       = math.floor(flex_total / n_flex)
 
+    -- Resolve a chip's fill-state — action chips invert via .selected,
+    -- navigable chips via key-equals-active. Used to colour separators
+    -- between adjacent inverted chips (otherwise a black separator
+    -- between two black chips is invisible and they merge).
+    local function isFilled(c)
+        if c.action then return c.selected and true or false end
+        return c.key == self.active
+    end
+
     for i, chip in ipairs(self.chips) do
         if i > 1 then
+            -- White separator when both adjacent chips are inverted (e.g.
+            -- selected currently-reading + active Home chip), so the chip
+            -- boundary stays visible. Black separator otherwise — same
+            -- behaviour as before.
+            local prev_filled = isFilled(self.chips[i - 1])
+            local cur_filled  = isFilled(chip)
+            local sep_color   = (prev_filled and cur_filled)
+                                and Blitbuffer.COLOR_WHITE
+                                or  Blitbuffer.COLOR_BLACK
             row[#row + 1] = LineWidget:new{
-                background = Blitbuffer.COLOR_BLACK,
+                background = sep_color,
                 dimen = Geom:new{ w = separator_w, h = self.height },
             }
         end
-        -- Selection state: navigable chips invert when their key matches
-        -- self.active. Action chips don't enter the active-chip slot, so
-        -- their selection comes from chip.selected (used by the
-        -- currently-reading chip to mirror "the hero shows lastfile").
-        local is_active
-        if chip.action then
-            is_active = chip.selected or false
-        else
-            is_active = (chip.key == self.active)
-        end
+        local is_active = isFilled(chip)
         local w
         if chip.action then
             w = action_w
@@ -336,7 +372,7 @@ function ChipStrip:_initChips()
                 max_width = w - 2 * Size.padding.small,
             }
         end
-        row[#row + 1] = FrameContainer:new{
+        local chip_body = FrameContainer:new{
             bordersize = 0,
             margin     = 0,
             padding    = 0,
@@ -346,6 +382,32 @@ function ChipStrip:_initChips()
                 cell_content,
             },
         }
+        if chip.action and is_active then
+            -- Selected action chip points up at the hero cover above.
+            -- Full chip-width base, ~25% strip-height tall — a "roof"
+            -- silhouette that visually anchors the chip to whatever's
+            -- above it in the layout.
+            local pointer_h = math.max(Screen:scaleBySize(5),
+                                       math.floor(self.height * 0.25))
+            local pointer = UpTrianglePointer:new{
+                width  = w,
+                height = pointer_h,
+                color  = Blitbuffer.COLOR_BLACK,
+            }
+            -- Negative y offset: the pointer paints into the area ABOVE
+            -- the chip strip (still within the bookshelf widget bb, so
+            -- refresh works). The strip's outer thin border is then
+            -- painted over the pointer's lowest row — both are black, so
+            -- the triangle silhouette continues smoothly across the line.
+            pointer.overlap_offset = { 0, -pointer_h }
+            row[#row + 1] = OverlapGroup:new{
+                dimen = Geom:new{ w = w, h = self.height },
+                chip_body,
+                pointer,
+            }
+        else
+            row[#row + 1] = chip_body
+        end
         local prev = self._chip_dimens[self.chips[i - 1] and self.chips[i - 1].key]
         local x = prev and (prev.x + prev.w + separator_w) or 0
         self._chip_dimens[chip.key] = { x = x, w = w }

@@ -236,6 +236,52 @@ function Repo.buildBook(filepath)
     book.page_num = ds:readSetting("last_page")
     book.book_pct = ds:readSetting("percent_finished")
     book.last_xp  = ds:readSetting("last_xpointer")
+    -- BIM skips page count for crengine docs (the unrendered getPageCount()
+    -- returns 2-3x the rendered count), so EPUB books have nil page_count
+    -- after buildBookMeta. Two sdr-side sources to fall back on, in order:
+    --
+    --   1. pagemap_doc_pages — set whenever the user has KOReader's stable
+    --      page numbers enabled (either publisher page labels ℗, or the
+    --      synthetic chars-per-page mode). Stable across font/render
+    --      changes — what most users mean by "page count" for an EPUB.
+    --
+    --   2. stats.pages — the count at the time the doc was last rendered.
+    --      Font-dependent, but populated for any opened EPUB.
+    --
+    -- Preferring pagemap_doc_pages means users with stable page numbers
+    -- enabled see the SAME count we'd show in the book-info dialog and
+    -- the reader footer, regardless of their current font scaling.
+    if not book.page_count then
+        local stable_pages = ds:readSetting("pagemap_doc_pages")
+        if stable_pages then
+            book.page_count = tonumber(stable_pages)
+        end
+    end
+    if not book.page_count then
+        local stats = ds:readSetting("stats")
+        if type(stats) == "table" and stats.pages then
+            book.page_count = tonumber(stats.pages)
+        end
+    end
+    -- page_num precedence mirrors page_count:
+    --   1. pagemap_current_page_label — the stable label at the user's
+    --      current position. May be non-numeric for front-matter (Roman
+    --      numerals "i", "ii"); tonumber-guarded so those fall through.
+    --   2. last_page — set for PDF/CBZ (already read above).
+    --   3. floor(percent_finished * page_count) — synthesised approximation
+    --      so the hero's "page N of M" template works for EPUBs the reader
+    --      hasn't given us a stable label for.
+    if not book.page_num then
+        local label = ds:readSetting("pagemap_current_page_label")
+        if label then
+            local n = tonumber(label)
+            if n then book.page_num = n end
+        end
+    end
+    if not book.page_num and book.book_pct and book.page_count then
+        book.page_num = math.floor(book.book_pct * book.page_count + 0.5)
+        if book.page_num < 1 then book.page_num = 1 end
+    end
     return book
 end
 

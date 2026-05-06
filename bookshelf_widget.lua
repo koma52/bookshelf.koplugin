@@ -224,12 +224,15 @@ function BookshelfWidget:_rebuild()
     -- chip is disabled.
     local CHIP_LABELS = {
         all = "Home", recent = "Recent", latest = "Latest",
-        series = "Series", favorites = "Favourites",
+        series = "Series", authors = "Authors", genres = "Genres",
+        favorites = "Favourites",
     }
     -- "All" leads (folder-aware browse rooted at home_dir, honours the
     -- user's KOReader collate / reverse / mixed / book-status-filter
     -- settings via FileChooser:genItemTableFromPath).
-    local CHIP_ORDER = { "all", "recent", "latest", "series", "favorites" }
+    local CHIP_ORDER = {
+        "all", "recent", "latest", "series", "authors", "genres", "favorites",
+    }
     local disabled_set = G_reader_settings:readSetting("bookshelf_chips_disabled") or {}
     local active_chips = {}
     for _, key in ipairs(CHIP_ORDER) do
@@ -404,6 +407,10 @@ function BookshelfWidget:_rebuild()
         local placeholder_text
         if self.chip == "series" then
             placeholder_text = _("Nothing in Series yet · Add series metadata to your books and they will appear here")
+        elseif self.chip == "authors" then
+            placeholder_text = _("No authors yet · Add author metadata to your books and they will appear here")
+        elseif self.chip == "genres" then
+            placeholder_text = _("No genres yet · Add keywords or subject metadata to your books and they will appear here")
         elseif self.chip == "favorites" then
             placeholder_text = _("No favourites yet · Long-press a book and tap 'Add to favourites'")
         elseif self.chip == "latest" then
@@ -702,7 +709,11 @@ function BookshelfWidget:_fetchChipItems(n)
     -- on the shelf path), and reusing them would dereference freed
     -- memory and SEGV.
     local tip = self._drilldown_path[#self._drilldown_path]
-    if tip and tip.kind == "series" then
+    -- Drill into a group (series / author / genre): payload.books already
+    -- carries Book records, but their cover_bbs may have been freed by a
+    -- prior render. Rebuild meta-only from filepath to refresh.
+    if tip and (tip.kind == "series" or tip.kind == "author"
+            or tip.kind == "genre") then
         local fresh = {}
         for _, b in ipairs(tip.payload.books) do
             local nb = b.filepath and Repo.buildBookMeta(b.filepath) or b
@@ -717,6 +728,8 @@ function BookshelfWidget:_fetchChipItems(n)
     if self.chip == "recent"    then return Repo.getRecent(n)       end
     if self.chip == "latest"    then return Repo.getLatest(n)       end
     if self.chip == "series"    then return Repo.getSeriesGroups(n) end
+    if self.chip == "authors"   then return Repo.getAuthors(n)      end
+    if self.chip == "genres"    then return Repo.getGenres(n)       end
     if self.chip == "favorites" then return Repo.getFavorites(n)    end
     return {}
 end
@@ -731,6 +744,8 @@ function BookshelfWidget:_chipLabel()
         recent    = "Recently read",
         latest    = "Latest additions",
         series    = "Your series",
+        authors   = "Authors",
+        genres    = "Genres",
         favorites = "Favourites",
     }
     return labels[self.chip] or ""
@@ -882,32 +897,26 @@ function BookshelfWidget:_buildShelfRows(items, content_w, shelf_h, PAD)
     -- threads this down to each SpineWidget; nil means no spine is
     -- highlighted (no preview active).
     local selected_filepath = self._preview_book and self._preview_book.filepath
-    local row_top = ShelfRow.new{
+    local row_opts = {
         width             = content_w,
         height            = shelf_h,
         gap               = PAD,
-        items             = items_top,
         selected_filepath = selected_filepath,
         on_book_tap       = function(b) bw:_previewBook(b) end,
         on_book_hold      = function(b) bw:_openBookMenu(b) end,
         on_series_tap     = function(s) bw:_expandSeries(s) end,
         on_series_hold    = function(s) bw:_openBookMenu(s) end,
+        on_author_tap     = function(g) bw:_expandAuthor(g) end,
+        on_author_hold    = function(_) end,
+        on_genre_tap      = function(g) bw:_expandGenre(g) end,
+        on_genre_hold     = function(_) end,
         on_folder_tap     = function(f) bw:_expandFolder(f) end,
         on_folder_hold    = function(_) end,  -- no folder menu yet
     }
-    local row_bottom = ShelfRow.new{
-        width             = content_w,
-        height            = shelf_h,
-        gap               = PAD,
-        items             = items_bottom,
-        selected_filepath = selected_filepath,
-        on_book_tap       = function(b) bw:_previewBook(b) end,
-        on_book_hold      = function(b) bw:_openBookMenu(b) end,
-        on_series_tap     = function(s) bw:_expandSeries(s) end,
-        on_series_hold    = function(s) bw:_openBookMenu(s) end,
-        on_folder_tap     = function(f) bw:_expandFolder(f) end,
-        on_folder_hold    = function(_) end,
-    }
+    row_opts.items = items_top
+    local row_top = ShelfRow.new(row_opts)
+    row_opts.items = items_bottom
+    local row_bottom = ShelfRow.new(row_opts)
     return row_top, row_bottom
 end
 
@@ -1664,7 +1673,9 @@ function BookshelfWidget:_drillInto(entry)
     -- drill-in target and reads as "the wrong book leaked in").
     -- The shelf below shows the same book with a selection border.
     self._preview_book = nil
-    if entry.kind == "series" and entry.payload and entry.payload.books then
+    if (entry.kind == "series" or entry.kind == "author"
+            or entry.kind == "genre")
+            and entry.payload and entry.payload.books then
         local first = entry.payload.books[1]
         if first and first.filepath then
             self._preview_book = Repo.buildBook(first.filepath) or first
@@ -1704,6 +1715,24 @@ function BookshelfWidget:_expandSeries(series)
         kind    = "series",
         label   = series.series_name,
         payload = series,
+    }
+end
+
+function BookshelfWidget:_expandAuthor(group)
+    if not group or not group.series_name then return end
+    self:_drillInto{
+        kind    = "author",
+        label   = group.series_name,
+        payload = group,
+    }
+end
+
+function BookshelfWidget:_expandGenre(group)
+    if not group or not group.series_name then return end
+    self:_drillInto{
+        kind    = "genre",
+        label   = group.series_name,
+        payload = group,
     }
 end
 

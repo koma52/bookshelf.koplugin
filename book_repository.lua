@@ -77,6 +77,21 @@ function Repo.buildBookMeta(filepath)
     -- fallback, the breadcrumb crumb, etc. all show something readable
     -- instead of empty / "?".
     local title    = (info.title and info.title ~= "") and info.title or filename
+    -- Genres come from BIM's `keywords` column (which mirrors the
+    -- credocument getDocProps "keywords" field). Format varies by
+    -- author/format: typically "Sci-Fi, Fantasy" or "Sci-Fi; Fantasy".
+    -- Split on either, trim, drop empties. nil if the field is absent.
+    local genres
+    if info.keywords and info.keywords ~= "" then
+        genres = {}
+        for part in info.keywords:gmatch("[^,;]+") do
+            local trimmed = part:match("^%s*(.-)%s*$")
+            if trimmed and trimmed ~= "" then
+                genres[#genres + 1] = trimmed
+            end
+        end
+        if #genres == 0 then genres = nil end
+    end
     return {
         filepath    = filepath,
         filename    = filename,
@@ -84,6 +99,7 @@ function Repo.buildBookMeta(filepath)
         title       = title,
         author      = authors and authors[1] or nil,
         authors     = authors,
+        genres      = genres,
         series      = info.series,
         series_name = series_name,
         series_num  = series_num,
@@ -178,14 +194,23 @@ local _walk_cache = {}     -- { [key] = { list = {...}, expires_at = number } }
 -- on the next chip rebuild.
 local SERIES_CACHE_TTL = WALK_CACHE_TTL
 local _series_cache    = {}  -- { [key] = { groups = {...}, expires_at = number } }
+-- Authors and Genres group caches. Same TTL + invalidation pattern as
+-- the series cache: filepaths-only "shape" so the cover_bb lifetime
+-- hazard from caching Book records doesn't apply.
+local _authors_cache   = {}
+local _genres_cache    = {}
 
 function Repo.invalidateWalkCache()
-    _walk_cache   = {}
-    _series_cache = {}
+    _walk_cache    = {}
+    _series_cache  = {}
+    _authors_cache = {}
+    _genres_cache  = {}
 end
 
 function Repo.invalidateSeriesCache()
-    _series_cache = {}
+    _series_cache  = {}
+    _authors_cache = {}
+    _genres_cache  = {}
 end
 
 local function walkBooks(root, depth, out, current_depth)
@@ -481,6 +506,156 @@ function Repo.getSeriesGroups(limit)
 
     local out = {}
     for i = 1, math.min(limit or 4, #list) do out[i] = list[i] end
+    return out
+end
+
+-- ─── getAuthors / getGenres ──────────────────────────────────────────────────
+-- Both return GroupGroup records shaped like the series-group records, so
+-- they can flow through the same SeriesStack widget on the shelf and the
+-- same drill-down path. Differences encoded via group.kind ("author" /
+-- "genre"); the band-text field stays `series_name` so SeriesStack
+-- doesn't need a bespoke parameter for each kind.
+--
+-- Authors: keyed on book.author (single primary author). Books with no
+-- author are skipped — the Author tab is implicitly "named authors only".
+-- Genres: keyed on each entry of book.genres (multi-tag — a book with
+-- "Sci-Fi, Fantasy" appears under both groups).
+--
+-- Both share the same caching pattern as getSeriesGroups: cache the SHAPE
+-- (filepaths + sort metadata), rehydrate Books on read.
+
+local function _hydrateGroupShape(shape)
+    local books = {}
+    for _, fp in ipairs(shape.filepaths) do
+        local b = Repo.buildBookMeta(fp)
+        if b then books[#books + 1] = b end
+    end
+    return {
+        kind        = shape.kind,
+        series_name = shape.series_name,
+        books       = books,
+        latest      = shape.latest,
+    }
+end
+
+-- _buildGroups(group_kind, key_fn, multi)
+-- Walks the library, groups books by key_fn(book), returns sorted groups.
+-- key_fn: (book) -> string | nil  for single-key (multi=false)
+-- key_fn: (book) -> table[string] | nil  for multi-key (multi=true)
+local function _buildGroups(group_kind, key_fn, multi)
+    local home  = G_reader_settings:readSetting("home_dir") or "/"
+    local depth = G_reader_settings:readSetting("bookshelf_latest_walk_depth") or 3
+    -- Read history → filepath read-time map so groups sort by recently-read.
+    local rh        = getReadHistory()
+    local read_time = {}
+    for _, entry in ipairs(rh.hist) do
+        local t = entry.time or 0
+        if t > (read_time[entry.file] or 0) then read_time[entry.file] = t end
+    end
+    local cands = cachedWalk(home, depth)
+    local groups = {}
+    local order  = {}
+    for _, c in ipairs(cands) do
+        local book = Repo.buildBookMeta(c.fp)
+        if book then
+            local keys = key_fn(book)
+            if keys then
+                if not multi then keys = { keys } end
+                for _, k in ipairs(keys) do
+                    if k and k ~= "" then
+                        local g = groups[k]
+                        if not g then
+                            g = {
+                                kind        = group_kind,
+                                series_name = k,
+                                books       = {},
+                                latest      = 0,
+                                _seen       = {},
+                            }
+                            groups[k] = g
+                            order[#order + 1] = k
+                        end
+                        if not g._seen[book.filepath] then
+                            g._seen[book.filepath] = true
+                            g.books[#g.books + 1] = book
+                        end
+                        local t = read_time[book.filepath] or c.mtime or 0
+                        if t > g.latest then g.latest = t end
+                    end
+                end
+            end
+        end
+    end
+    local list = {}
+    for _, k in ipairs(order) do list[#list + 1] = groups[k] end
+    table.sort(list, function(a, b) return a.latest > b.latest end)
+    for _, g in ipairs(list) do
+        g._seen = nil
+        table.sort(g.books, function(a, b)
+            return (a.title or "") < (b.title or "")
+        end)
+    end
+    return list
+end
+
+local function _cacheGroupShapes(list, kind)
+    local shapes = {}
+    for _, group in ipairs(list) do
+        local fps = {}
+        for _, b in ipairs(group.books) do fps[#fps + 1] = b.filepath end
+        shapes[#shapes + 1] = {
+            kind        = kind,
+            series_name = group.series_name,
+            filepaths   = fps,
+            latest      = group.latest,
+        }
+    end
+    return shapes
+end
+
+function Repo.getAuthors(limit)
+    local home  = G_reader_settings:readSetting("home_dir") or "/"
+    local depth = G_reader_settings:readSetting("bookshelf_latest_walk_depth") or 3
+    local key   = (home or "/") .. ":" .. tostring(depth or 0)
+    local now   = os.time()
+    local cached = _authors_cache[key]
+    if cached and cached.expires_at > now then
+        local out = {}
+        for i = 1, math.min(limit or 8, #cached.groups) do
+            out[i] = _hydrateGroupShape(cached.groups[i])
+        end
+        return out
+    end
+    local list = _buildGroups("author", function(b) return b.author end, false)
+    _authors_cache[key] = {
+        groups     = _cacheGroupShapes(list, "author"),
+        expires_at = now + SERIES_CACHE_TTL,
+    }
+    local out = {}
+    for i = 1, math.min(limit or 8, #list) do out[i] = list[i] end
+    return out
+end
+
+function Repo.getGenres(limit)
+    local home  = G_reader_settings:readSetting("home_dir") or "/"
+    local depth = G_reader_settings:readSetting("bookshelf_latest_walk_depth") or 3
+    local key   = (home or "/") .. ":" .. tostring(depth or 0)
+    local now   = os.time()
+    local cached = _genres_cache[key]
+    if cached and cached.expires_at > now then
+        local out = {}
+        for i = 1, math.min(limit or 8, #cached.groups) do
+            out[i] = _hydrateGroupShape(cached.groups[i])
+        end
+        return out
+    end
+    local list = _buildGroups("genre", function(b) return b.genres end, true)
+    _genres_cache[key] = {
+        groups     = _cacheGroupShapes(list, "genre"),
+        expires_at = now + SERIES_CACHE_TTL,
+    }
+    local out = {}
+    for i = 1, math.min(limit or 8, #list) do out[i] = list[i] end
     return out
 end
 

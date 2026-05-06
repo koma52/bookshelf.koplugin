@@ -83,14 +83,33 @@ function ShelfRow.new(opts)
                 is_selected = opts.selected_filepath and item.first_book
                               and item.first_book.filepath == opts.selected_filepath,
             }
-        elseif item and item.books then
-            -- SeriesGroup (has a .books array)
+        elseif item and item.kind == "author" then
+            -- Author group (SeriesStack visual, author name on the band)
             row[#row + 1] = SeriesStack:new{
-                series    = item,
-                width     = slot_w,
-                height    = slot_h,
-                on_tap    = opts.on_series_tap,
-                on_hold   = opts.on_series_hold,
+                series  = item,
+                width   = slot_w,
+                height  = slot_h,
+                on_tap  = opts.on_author_tap,
+                on_hold = opts.on_author_hold,
+            }
+        elseif item and item.kind == "genre" then
+            -- Genre group (SeriesStack visual, genre name on the band)
+            row[#row + 1] = SeriesStack:new{
+                series  = item,
+                width   = slot_w,
+                height  = slot_h,
+                on_tap  = opts.on_genre_tap,
+                on_hold = opts.on_genre_hold,
+            }
+        elseif item and item.books then
+            -- SeriesGroup (has a .books array; legacy detection — kind
+            -- not always set on series records).
+            row[#row + 1] = SeriesStack:new{
+                series  = item,
+                width   = slot_w,
+                height  = slot_h,
+                on_tap  = opts.on_series_tap,
+                on_hold = opts.on_series_hold,
             }
         elseif item then
             -- Single book record

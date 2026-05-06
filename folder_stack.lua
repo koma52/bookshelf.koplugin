@@ -49,30 +49,28 @@ local SpineWidget    = require("spine_widget")
 --   y at x=w-1 is SLOPE_RIGHT_FRAC·card_h
 -- Below max(SLOPE_LEFT_FRAC, SLOPE_RIGHT_FRAC) the cardboard is
 -- full-width — that's the "rectangle" where the label lives.
--- Magazine height reduced by ≈ 1/3 from the prior 0.50/0.60 so the
--- book peeks more prominently above the cardboard.
-local SLOPE_LEFT_FRAC  = 0.67
-local SLOPE_RIGHT_FRAC = 0.73
+-- Slope position. Earlier values (0.67/0.73) made the rectangle portion
+-- too short for folder names like "Southern Reach" to wrap to two lines —
+-- they fell back to single-line ellipsis. Lowered to 0.60/0.66 so the
+-- rectangle now fits two lines of bold-16 with breathing room, while still
+-- leaving substantial book peek above (book pokes up further than the
+-- pre-1/3-shorter 0.50/0.60 baseline since the slope is slightly higher).
+local SLOPE_LEFT_FRAC  = 0.60
+local SLOPE_RIGHT_FRAC = 0.66
 
--- Cardboard colour and a darker outline. Dispatched on Screen:isColorEnabled
--- so colour devices (Kaleido panels, SDL desktop) get a real manilla cardboard
--- hue rather than reading the grey through their RGB filter as a desaturated
--- mush. On B&W e-ink the manilla degrades to grey via the ColorRGB→Color8
--- coercion; we set the grayscale value directly so dithering stays predictable
--- and we don't pay the colour-coerce cost on every paint.
--- Lightened from the previous gray(0.30) — user wanted the magazine to read
--- as cardboard rather than a dark slab when sitting next to bright covers.
-local CARDBOARD, CARDBOARD_EDGE
+-- Cardboard colour. Dispatched on Screen:isColorEnabled at module-load time
+-- so colour devices (Kaleido panels, SDL desktop) get a real manilla hue.
+-- On B&W e-ink we set a grayscale value directly so dithering stays
+-- predictable. Edge is COLOR_BLACK on both branches — matches the book
+-- spine border weight + colour exactly so adjacent magazines and books on
+-- the same shelf read as a unified shelf row, not two visual languages.
+local CARDBOARD
 if Screen.isColorEnabled and Screen:isColorEnabled() then
-    -- Manilla cardboard. Edge is a deeper tan so the outline reads as a
-    -- shadow-side fold rather than a separate stroke colour.
-    CARDBOARD      = Blitbuffer.colorFromString("#e7c9a9")
-    CARDBOARD_EDGE = Blitbuffer.colorFromString("#b8946b")
+    CARDBOARD = Blitbuffer.colorFromString("#e7c9a9")
 else
-    CARDBOARD      = Blitbuffer.gray(0.20)
-    CARDBOARD_EDGE = Blitbuffer.gray(0.55)
+    CARDBOARD = Blitbuffer.gray(0.20)
 end
-local PAGE_BG         = Blitbuffer.COLOR_WHITE
+local CARDBOARD_EDGE  = Blitbuffer.COLOR_BLACK
 
 -- Drop-shadow geometry — must match SpineWidget so book and magazine spines
 -- on the same shelf cast shadows the same depth. The previous folder render
@@ -126,78 +124,123 @@ function MagazinePolygon:paintTo(bb, x, y)
     local yl    = self.y_left
     local yr    = self.y_right
     local fill  = self.fill_color
+    local r     = self.radius or 0
+    local r_sq  = r * r
     local y_min = math.min(yl, yr)
     local y_max = math.max(yl, yr)
-    -- Per-row fill. "Below the slope" is geometrically the side closer
-    -- to the bottom of the slot — for slope falling L→R (yl < yr) that
-    -- is the LEFT side of each slope-band row; for slope rising L→R
-    -- (yl > yr) it's the RIGHT side. Below y_max the cardboard is full
-    -- width (the rectangle portion); above y_min nothing paints.
     local fall_lr = (yl <= yr)
-    for dy = 0, h - 1 do
-        if dy >= y_max then
-            bb:paintRect(x, y + dy, w, 1, fill)
-        elseif dy >= y_min then
-            local frac    = (dy - yl) / (yr - yl)
-            local x_slope = math.floor((w - 1) * frac + 0.5)
-            if x_slope < 0 then x_slope = 0 end
-            if x_slope > w - 1 then x_slope = w - 1 end
-            if fall_lr then
-                -- Slope falls L→R: cardboard to the LEFT of x_slope.
-                if x_slope > 0 then
-                    bb:paintRect(x, y + dy, x_slope, 1, fill)
-                end
-            else
-                -- Slope rises L→R: cardboard to the RIGHT of x_slope.
-                if x_slope < w then
-                    bb:paintRect(x + x_slope, y + dy, w - x_slope, 1, fill)
-                end
-            end
-        end
+
+    -- Use paintRectRGB32 unconditionally for the fill. paintRect strips
+    -- ColorRGB→Color8 via getColor8() before fill (blitbuffer.lua:1677),
+    -- so a manilla ColorRGB32 lands on the framebuffer as the equivalent
+    -- grayscale value — the body renders silver instead of tan.
+    -- paintRectRGB32 calls color:getColorRGB32() first, which all Color
+    -- types implement (Color8 returns the grayscale value as r=g=b), so
+    -- this works equally for the cardboard fill (RGB hue preserved) and
+    -- the shadow (Color8 grayscale, coerces cleanly).
+    --
+    -- Note: can't sniff `fill.r` to dispatch — Color8 is an FFI struct,
+    -- and accessing a missing field on a C struct hard-errors instead of
+    -- returning nil. Cheaper to just always go through the RGB path.
+    local function fillRect(rx, ry, rw, rh)
+        bb:paintRectRGB32(rx, ry, rw, rh, fill)
     end
-    -- Round bottom-left and bottom-right corners (page-bg knockout).
-    local r    = self.radius or 0
-    local r_sq = r * r
-    if r > 0 then
-        for i = 0, r - 1 do
-            local dy = h - r + i
-            local i_sq = (i + 1) * (i + 1)
+
+    -- rowExtent(dy) → (left, right) for the rounded BOTTOM corners.
+    -- The corner arc is centred at (r, h-r) with radius r; for row dy in
+    -- the corner band, the leftmost in-shape x is r - sqrt(r² - i²) where
+    -- i = dy - (h-r) is the y-distance from the corner centre. Squared
+    -- distance i_sq = (i+1)² (we use i+1 to bias toward the inclusive
+    -- pixel on the boundary). At i=0 (top of band, i_sq=1) cutoff ≈ 0;
+    -- at i=r-1 (bottom row, i_sq=r²) cutoff ≈ r. Earlier code had this
+    -- inverted, which painted nothing at the top of the corner band and
+    -- everything at the bottom — the body's bottom edge looked detached
+    -- from the cardboard, with a "shadow bar" gap between.
+    local function rowExtent(dy)
+        if r > 0 and dy >= h - r then
+            local i     = dy - (h - r)
+            local i_sq  = (i + 1) * (i + 1)
             local cutoff = 0
             while cutoff < r and (r - cutoff) * (r - cutoff) + i_sq > r_sq do
                 cutoff = cutoff + 1
             end
-            if cutoff > 0 then
-                bb:paintRect(x, y + dy, cutoff, 1, PAGE_BG)
-                bb:paintRect(x + w - cutoff, y + dy, cutoff, 1, PAGE_BG)
+            return cutoff, w - cutoff
+        end
+        return 0, w
+    end
+
+    -- Rectangle portion above the corner-clip band: one bulk fillRect.
+    local rect_top         = y_max
+    local rect_full_bottom = h - 1 - (r > 0 and r or 0)
+    if rect_full_bottom >= rect_top then
+        fillRect(x, y + rect_top, w, rect_full_bottom - rect_top + 1)
+    end
+    -- Bottom rounded-corner band: row-by-row with extent clipping. Don't
+    -- paint outside the rounded area (no PAGE_BG knockout) — preserves
+    -- whatever's underneath (shadow fill or page bg) and lets the shape's
+    -- silhouette emerge from the absence.
+    if r > 0 then
+        for dy = math.max(rect_top, h - r), h - 1 do
+            local row_left, row_right = rowExtent(dy)
+            if row_right > row_left then
+                fillRect(x + row_left, y + dy, row_right - row_left, 1)
             end
         end
     end
+    -- Slope band (between y_min and y_max): per-row triangular fill.
+    -- The cardboard's left edge IS the visible slope — drawing a separate
+    -- slope-edge line on a shallow slope (~6% of card_h) accumulates as a
+    -- horizontal "lip" at the top-left, since each row holds the slope
+    -- for many x-pixels before stepping. Letting the fill define the
+    -- slope sidesteps that aliasing.
+    for dy = y_min, y_max - 1 do
+        local frac    = (dy - yl) / (yr - yl)
+        local x_slope = math.floor((w - 1) * frac + 0.5)
+        if x_slope < 0 then x_slope = 0 end
+        if x_slope > w - 1 then x_slope = w - 1 end
+        if fall_lr then
+            if x_slope > 0 then
+                fillRect(x, y + dy, x_slope, 1)
+            end
+        else
+            if x_slope < w then
+                fillRect(x + x_slope, y + dy, w - x_slope, 1)
+            end
+        end
+    end
+
     if self.edge_color then
         local b    = CARD_BORDER
         local edge = self.edge_color
-        bb:paintRect(x + r, y + h - b, w - 2 * r, b, edge)            -- bottom
-        -- Side edges start where the slope MEETS each side, not at
-        -- y_min — using y_min painted a stray strip from y_min up to
-        -- yr on whichever side the slope was lower (visible as a thin
-        -- black line extending past the polygon's actual outline).
+        -- Bottom edge (between the rounded corners — same x-extent as
+        -- the rect's full-width fill).
+        bb:paintRect(x + r, y + h - b, w - 2 * r, b, edge)
+        -- Side walls from where the slope MEETS each side down to the
+        -- rounded bottom corner.
         local right_h = h - yr - r
         if right_h > 0 then
-            bb:paintRect(x + w - b, y + yr, b, right_h, edge)         -- right edge
+            bb:paintRect(x + w - b, y + yr, b, right_h, edge)
         end
         local left_h = h - yl - r
         if left_h > 0 then
-            bb:paintRect(x, y + yl, b, left_h, edge)                   -- left edge
+            bb:paintRect(x, y + yl, b, left_h, edge)
         end
-        -- Slope.
-        local steps = math.max(w, math.abs(yr - yl))
-        for s = 0, steps do
-            local px = math.floor(s * (w - 1) / steps + 0.5)
-            local py = math.floor(yl + (yr - yl) * s / steps + 0.5)
-            bb:paintRect(x + px, y + py, b, b, edge)
+        -- Slope edge: one pixel per x column, following the slope line.
+        -- Single-pixel stepping (vs the previous bxb blocks) keeps the
+        -- shallow ~6%-grad slope from accumulating a horizontal "lip" at
+        -- the top-left, while still tracing the full diagonal from the
+        -- left wall's top to the right wall's top.
+        for dx = 0, w - 1 do
+            local frac = dx / (w - 1)
+            local py   = math.floor(yl + (yr - yl) * frac + 0.5)
+            bb:paintRect(x + dx, y + py, 1, b, edge)
         end
+        -- Rounded corner edge pixels — one edge dot per row at the
+        -- cutoff boundary, traced via the same i_sq=(i+1)² formula as
+        -- the rowExtent fill so the edge sits ON the silhouette.
         if r > 0 then
             for i = 0, r - 1 do
-                local dy = h - r + i
+                local dy   = h - r + i
                 local i_sq = (i + 1) * (i + 1)
                 local cutoff = 0
                 while cutoff < r and (r - cutoff) * (r - cutoff) + i_sq > r_sq do
@@ -207,6 +250,33 @@ function MagazinePolygon:paintTo(bb, x, y)
                 bb:paintRect(x + w - cutoff - b, y + dy, b, b, edge)
             end
         end
+    end
+end
+
+-- A small filled right triangle painted at the magazine's top-right corner
+-- to bridge the drop shadow to the slope endpoint. Without it, the visible
+-- shadow strip starts SHADOW_OFFSET pixels below the slope's right end and
+-- reads as a "step" detached from the magazine; the triangle continues the
+-- slope diagonal into the shadow region so the eye reads the whole shadow
+-- as a single connected silhouette.
+--
+-- Positioned at (card_w, yr) in OverlapGroup coords; size = SHADOW_OFFSET.
+-- Hypotenuse runs from the top-left corner (where the magazine's slope
+-- ends) to the bottom-right corner (where the shadow's slope endpoint
+-- offset lands). Fill is the BELOW-LEFT half of the box (right angle at
+-- bottom-left), since that's the area the slope-extension cuts off from
+-- the shadow's reach.
+local SlopeShadowBridge = Widget:extend{
+    size  = nil,
+    color = nil,
+}
+function SlopeShadowBridge:init()
+    self.dimen = Geom:new{ w = self.size, h = self.size }
+end
+function SlopeShadowBridge:paintTo(bb, x, y)
+    for dy = 0, self.size - 1 do
+        local row_w = dy + 1
+        bb:paintRect(x, y + dy, row_w, 1, self.color)
     end
 end
 
@@ -341,12 +411,29 @@ function FolderStack:init()
         shadow_polygon,
     }
 
+    -- Top-right shadow bridge: small triangle at (card_w, y_right) that
+    -- continues the slope diagonal into the shadow region. Painted before
+    -- the magazine/label so the magazine's right wall edge can cleanly
+    -- overlap its left vertex without a colour conflict.
+    local bridge = SlopeShadowBridge:new{
+        size  = SHADOW_OFFSET,
+        color = SHADOW_GRAY,
+    }
+    local bridge_positioned = FrameContainer:new{
+        bordersize   = 0,
+        padding      = 0,
+        padding_top  = y_right,
+        padding_left = card_w,
+        bridge,
+    }
+
     self[1] = OverlapGroup:new{
         dimen = self.dimen,
         shadow_positioned,     -- 0: drop shadow (back-most)
-        book_positioned,       -- 1: book cover, inset within card
-        magazine,              -- 2: cardboard front (covers book bottom)
-        label_positioned,      -- 3: folder name centred on cardboard
+        bridge_positioned,     -- 1: shadow bridge at top-right slope end
+        book_positioned,       -- 2: book cover, inset within card
+        magazine,              -- 3: cardboard front (covers book bottom)
+        label_positioned,      -- 4: folder name centred on cardboard
     }
     self.ges_events = {
         Tap  = { GestureRange:new{ ges = "tap",  range = self.dimen } },

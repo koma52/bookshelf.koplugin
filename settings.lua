@@ -315,7 +315,13 @@ end
 function Settings:_heroSubItems()
     local Regions = require("hero_regions")
     local Tokens  = require("tokens")
-    local items = {}
+    local items = {
+        {
+            text      = _("Font scale"),
+            callback  = function() self:_pickFontScale() end,
+            separator = true,
+        },
+    }
     for _i, key in ipairs(Regions.ORDER) do
         items[#items + 1] = {
             keep_menu_open = true,
@@ -515,112 +521,6 @@ function Settings:_about()
     })
 end
 
--- ─── Main settings menu ───────────────────────────────────────────────────────
-
--- Settings:show()
--- Opens the settings menu as a popout modal.  Toggle items show "✓" on the
--- right when enabled (via mandatory_func).  After toggling, the menu is
--- re-opened so the user can see the updated state.
--- show(bw)
--- bw (optional) is the live BookshelfWidget instance, stashed on the
--- Settings module so the font-scale nudge dialog can call _rebuild on it
--- for live preview. Long-press handlers in bookshelf_widget.lua pass `self`.
--- Returns the Bookshelf settings as a KOReader sub_item_table. main.lua
--- consumes this to nest the settings under the FM menu's folder/file tab.
--- Optional `bw` lets the nudge dialog reach the live BookshelfWidget for
--- font-scale preview rebuilds.
-function Settings:menuItems(bw, plugin)
-    if bw then self._bw = bw end
-    if plugin then self._plugin = plugin end
-    return {
-        {
-            text                = _("Edit hero card"),
-            sub_item_table_func = function() return self:_heroSubItems() end,
-        },
-        {
-            text                = _("Edit shelf tabs"),
-            sub_item_table_func = function() return self:_chipsSubItems() end,
-        },
-        {
-            text     = _("Hero card font scale"),
-            callback = function() self:_pickFontScale() end,
-        },
-        {
-            text     = _("\"Latest\" walk depth"),
-            callback = function() self:_pickLatestDepth() end,
-        },
-        {
-            text                = _("Updates"),
-            sub_item_table_func = function() return self:_updateSubItems() end,
-        },
-        {
-            text                = _("Beta features"),
-            sub_item_table_func = function() return self:_betaSubItems() end,
-        },
-        {
-            text     = _("About"),
-            callback = function() self:_about() end,
-            separator = true,
-        },
-    }
-end
-
--- _betaSubItems() — opt-in toggles for experimental features. Items here
--- are off by default and gated separately from the rest so users running
--- the stable build don't pay any cost. Each toggle is wired to clear the
--- relevant Repo caches so the change applies on the next render without
--- a manual refresh.
-function Settings:_betaSubItems()
-    return {
-        {
-            text = _("Read calibre metadata.calibre"),
-            help_text = _("For users with a Calibre-managed library. "
-                .. "Reads the metadata.calibre JSON file at home_dir to "
-                .. "cover title / authors / series / tags / language for "
-                .. "every book in the library — no per-book extraction "
-                .. "needed. BIM-cached metadata still wins per field; "
-                .. "Calibre data only fills gaps."),
-            checked_func = function()
-                return G_reader_settings:readSetting("bookshelf_calibre_metadata") == true
-            end,
-            keep_menu_open = true,
-            callback = function()
-                local enabled = G_reader_settings:readSetting("bookshelf_calibre_metadata") == true
-                G_reader_settings:saveSetting("bookshelf_calibre_metadata", not enabled)
-                G_reader_settings:flush()
-                -- Invalidate the walk + group caches so the toggle
-                -- applies on the very next chip render.
-                local ok, Repo = pcall(require, "book_repository")
-                if ok and Repo and Repo.invalidateWalkCache then
-                    Repo.invalidateWalkCache()
-                end
-                if self._bw and self._bw._rebuild then
-                    self._bw:_rebuild()
-                    UIManager:setDirty(self._bw, "ui")
-                end
-            end,
-        },
-        {
-            text = _("Auto-refresh on sort change"),
-            help_text = _("When you change KOReader's Sort by / Reverse "
-                .. "sorting / Folders and files mixed / Filter book "
-                .. "status options, refresh Bookshelf's home view "
-                .. "immediately. By default the new order only shows "
-                .. "after switching tabs. Hooks FileChooser:refreshPath "
-                .. "globally — disable if it conflicts with other plugins."),
-            checked_func = function()
-                return G_reader_settings:readSetting("bookshelf_auto_refresh_on_sort") == true
-            end,
-            keep_menu_open = true,
-            callback = function()
-                local enabled = G_reader_settings:readSetting("bookshelf_auto_refresh_on_sort") == true
-                G_reader_settings:saveSetting("bookshelf_auto_refresh_on_sort", not enabled)
-                G_reader_settings:flush()
-            end,
-        },
-    }
-end
-
 -- _updateSubItems() — drill-down menu for the in-app updater. Mirrors
 -- bookends's structure: a "Notify" toggle, a primary update row that
 -- auto-relabels when an update is queued, and an "Advanced" pocket for
@@ -704,17 +604,6 @@ function Settings:_updateSubItems()
             },
         },
     }
-end
-
--- show(bw) — back-compat shim for any caller that still uses the old API
--- (the main-menu now feeds menuItems() directly). Opens the FM menu so
--- the user can navigate to the Bookshelf submenu.
-function Settings:show(bw)
-    if bw then self._bw = bw end
-    local FileManager = require("apps/filemanager/filemanager")
-    if FileManager and FileManager.instance and FileManager.instance.menu then
-        FileManager.instance.menu:onShowMenu()
-    end
 end
 
 return Settings

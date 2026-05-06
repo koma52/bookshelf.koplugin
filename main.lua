@@ -247,20 +247,28 @@ end
 -- Main menu entry
 -- ---------------------------------------------------------------------------
 
--- Extend KOReader's filemanager_menu_order so our entries land in the
--- folder/file tab WITHOUT the "NEW:" prefix MenuSorter applies to items
--- not in any order list. Idempotent — safe to call from init() each load.
+-- Inject a dedicated "bookshelf_tab" top-level tab into the FM menu.
+-- Patching the cached order module is safe because addToMainMenu fires
+-- before MenuSorter:mergeAndSort runs. Idempotent.
 function Bookshelf:_extendMenuOrder()
     local ok, order = pcall(require, "ui/elements/filemanager_menu_order")
     if not ok or type(order) ~= "table"
-       or type(order.filemanager_settings) ~= "table" then
+       or type(order["KOMenu:menu_buttons"]) ~= "table" then
         return
     end
-    for _i, id in ipairs(order.filemanager_settings) do
-        if id == "bookshelf_root" then return end
+    for _, id in ipairs(order["KOMenu:menu_buttons"]) do
+        if id == "bookshelf_tab" then return end
     end
-    table.insert(order.filemanager_settings, "----------------------------")
-    table.insert(order.filemanager_settings, "bookshelf_root")
+    table.insert(order["KOMenu:menu_buttons"], 1, "bookshelf_tab")
+    order.bookshelf_tab = {
+        "bookshelf_toggle",
+        "bookshelf_show_fm",
+        "bookshelf_hero_card",
+        "bookshelf_shelf_tabs",
+        "bookshelf_updates",
+        "bookshelf_advanced",
+        "bookshelf_about",
+    }
 end
 
 -- True when the BookshelfWidget instance is in the UIManager window stack
@@ -279,54 +287,116 @@ end
 
 function Bookshelf:addToMainMenu(menu_items)
     local outer = self
-    -- Single submenu that bundles the toggle + dismiss + settings, anchored
-    -- to the bookshelf_root slot we registered in _extendMenuOrder. Built
-    -- lazily so the live BookshelfWidget reference + window-stack state is
-    -- current at open time.
-    menu_items.bookshelf_root = {
-        text                = _("Bookshelf"),
+    local S = require("settings")
+    -- Stash plugin ref now so _updateSubItems callbacks resolve correctly.
+    S._plugin = outer
+
+    menu_items.bookshelf_tab = { icon = "book.opened" }
+
+    menu_items.bookshelf_toggle = {
+        text_func = function()
+            return outer:_isShowing() and _("Close Bookshelf") or _("Open Bookshelf")
+        end,
+        callback = function()
+            if outer:_isShowing() then
+                UIManager:close(outer._widget)
+            else
+                outer:show()
+            end
+        end,
+    }
+
+    menu_items.bookshelf_show_fm = {
+        text         = _("Show file browser"),
+        enabled_func = function() return outer:_isShowing() end,
+        callback     = function()
+            if outer._widget then UIManager:close(outer._widget) end
+            local FileManager = require("apps/filemanager/filemanager")
+            if FileManager.instance then
+                UIManager:setDirty(FileManager.instance, "ui")
+            end
+        end,
+        separator = true,
+    }
+
+    menu_items.bookshelf_hero_card = {
+        text                = _("Edit book detail view"),
         sub_item_table_func = function()
-            local out = {}
-            local showing = outer:_isShowing()
-            -- Toggle entry: label flips based on whether bookshelf is up.
-            out[#out + 1] = {
-                text     = showing and _("Close Bookshelf") or _("Open Bookshelf"),
+            S._bw = outer._widget
+            return S:_heroSubItems()
+        end,
+    }
+
+    menu_items.bookshelf_shelf_tabs = {
+        text                = _("Choose Bookshelf tabs"),
+        sub_item_table_func = function()
+            S._bw = outer._widget
+            return S:_chipsSubItems()
+        end,
+    }
+
+    menu_items.bookshelf_updates = {
+        text                = _("Updates"),
+        sub_item_table_func = function() return S:_updateSubItems() end,
+    }
+
+    menu_items.bookshelf_advanced = {
+        text           = _("Advanced settings"),
+        sub_item_table = {
+            {
+                text     = _('"Latest" walk depth'),
+                callback = function() S:_pickLatestDepth() end,
+            },
+            {
+                text = _("Read calibre metadata.calibre"),
+                help_text = _("For users with a Calibre-managed library. "
+                    .. "Reads the metadata.calibre JSON file at home_dir to "
+                    .. "cover title / authors / series / tags / language for "
+                    .. "every book in the library — no per-book extraction "
+                    .. "needed. BIM-cached metadata still wins per field; "
+                    .. "Calibre data only fills gaps."),
+                checked_func   = function()
+                    return G_reader_settings:readSetting("bookshelf_calibre_metadata") == true
+                end,
+                keep_menu_open = true,
                 callback = function()
-                    if outer:_isShowing() then
-                        UIManager:close(outer._widget)
-                    else
-                        outer:show()
+                    local enabled = G_reader_settings:readSetting("bookshelf_calibre_metadata") == true
+                    G_reader_settings:saveSetting("bookshelf_calibre_metadata", not enabled)
+                    G_reader_settings:flush()
+                    local ok, Repo = pcall(require, "book_repository")
+                    if ok and Repo and Repo.invalidateWalkCache then
+                        Repo.invalidateWalkCache()
+                    end
+                    if S._bw and S._bw._rebuild then
+                        S._bw:_rebuild()
+                        UIManager:setDirty(S._bw, "ui")
                     end
                 end,
-            }
-            -- Dismiss-without-changing-start_with: useful when Bookshelf is
-            -- the home but the user wants to peek at the underlying FM
-            -- (which a skin plugin like ZenUI/SimpleUI may have decorated).
-            -- Only meaningful when bookshelf is currently up.
-            if showing then
-                out[#out + 1] = {
-                    text     = _("Show file browser"),
-                    callback = function()
-                        if outer._widget then UIManager:close(outer._widget) end
-                        -- Explicitly reactivate FM after the dismiss. Just
-                        -- removing the widget from the stack should be enough
-                        -- but a full UI refresh ensures FM's gesture handlers
-                        -- see themselves as the active surface.
-                        local FileManager = require("apps/filemanager/filemanager")
-                        if FileManager.instance then
-                            UIManager:setDirty(FileManager.instance, "ui")
-                        end
-                    end,
-                    separator = true,
-                }
-            else
-                out[#out].separator = true
-            end
-            for _i, it in ipairs(require("settings"):menuItems(outer._widget, outer)) do
-                out[#out + 1] = it
-            end
-            return out
-        end,
+            },
+            {
+                text = _("Auto-refresh on sort change"),
+                help_text = _("When you change KOReader's Sort by / Reverse "
+                    .. "sorting / Folders and files mixed / Filter book "
+                    .. "status options, refresh Bookshelf's home view "
+                    .. "immediately. By default the new order only shows "
+                    .. "after switching tabs. Hooks FileChooser:refreshPath "
+                    .. "globally — disable if it conflicts with other plugins."),
+                checked_func   = function()
+                    return G_reader_settings:readSetting("bookshelf_auto_refresh_on_sort") == true
+                end,
+                keep_menu_open = true,
+                callback = function()
+                    local enabled = G_reader_settings:readSetting("bookshelf_auto_refresh_on_sort") == true
+                    G_reader_settings:saveSetting("bookshelf_auto_refresh_on_sort", not enabled)
+                    G_reader_settings:flush()
+                end,
+            },
+        },
+    }
+
+    menu_items.bookshelf_about = {
+        text     = _("About"),
+        callback = function() S:_about() end,
     }
 end
 

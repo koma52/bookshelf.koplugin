@@ -1,5 +1,6 @@
 -- scaled_cover_cache.lua
 -- LRU of upscaled cover bbs for the small-cover branch in spine_widget.
+local logger = require("logger")
 --
 -- Why this exists: BookInfoManager only DOWNSCALES when caching a cover
 -- (see plugins/coverbrowser.koplugin/bookinfomanager.lua:536) — publisher
@@ -23,9 +24,12 @@
 -- out-of-band. clear() exists for plugin teardown.
 
 local ScaledCoverCache = {
-    _capacity = 16,    -- ~1.7 MiB at 271×410×4 bytes
+    _capacity = 32,    -- ~3.4 MiB at 271×410×4 bytes; covers 4 full pages without eviction
     _cache    = {},    -- string key → bb
     _order    = {},    -- list of keys, oldest at front, MRU at back
+    _hits     = 0,     -- perf: cache hits this session
+    _puts     = 0,     -- perf: cache misses (scales) this session
+    _evictions= 0,     -- perf: evictions this session
 }
 
 local function key_for(filepath, w, h)
@@ -47,6 +51,9 @@ function ScaledCoverCache:_evictIfNeeded()
         local bb  = self._cache[key]
         self._cache[key] = nil
         if bb and bb.free then pcall(function() bb:free() end) end
+        self._evictions = self._evictions + 1
+        logger.dbg(string.format("[bookshelf perf] ScaledCoverCache: EVICT key=%s size=%d/%d",
+            key, #self._order, self._capacity))
     end
 end
 
@@ -57,6 +64,7 @@ function ScaledCoverCache:get(filepath, w, h)
     local key = key_for(filepath, w, h)
     local bb  = self._cache[key]
     if not bb then return nil end
+    self._hits = self._hits + 1
     self:_removeKey(key)
     self._order[#self._order + 1] = key
     return bb
@@ -76,17 +84,25 @@ function ScaledCoverCache:put(filepath, w, h, bb)
     end
     self._cache[key] = bb
     self._order[#self._order + 1] = key
+    self._puts = self._puts + 1
+    logger.dbg(string.format("[bookshelf perf] ScaledCoverCache: MISS scaled %dx%d size=%d/%d hits=%d puts=%d",
+        w, h, #self._order, self._capacity, self._hits, self._puts))
     self:_evictIfNeeded()
 end
 
 -- clear — drop everything. Call from plugin teardown if you want the
 -- session's cache memory back before KOReader exits.
 function ScaledCoverCache:clear()
+    logger.dbg(string.format("[bookshelf perf] ScaledCoverCache: clear hits=%d puts=%d evictions=%d",
+        self._hits, self._puts, self._evictions))
     for _, bb in pairs(self._cache) do
         if bb and bb.free then pcall(function() bb:free() end) end
     end
-    self._cache = {}
-    self._order = {}
+    self._cache     = {}
+    self._order     = {}
+    self._hits      = 0
+    self._puts      = 0
+    self._evictions = 0
 end
 
 return ScaledCoverCache

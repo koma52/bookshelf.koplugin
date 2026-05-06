@@ -23,6 +23,17 @@ local Repo        = require("book_repository")
 local HeroCard    = require("hero_card")
 local ChipStrip   = require("chip_strip")
 local ShelfRow    = require("shelf_row")
+local logger      = require("logger")
+
+-- Wall-clock timer for perf instrumentation. LuaSocket's gettime() gives
+-- fractional seconds including I/O waits; os.clock() is CPU-only (fallback).
+local _gettime
+do
+    local ok, s = pcall(require, "socket")
+    _gettime = (ok and s and type(s.gettime) == "function")
+        and function() return s.gettime() end
+        or  os.clock
+end
 
 -- ─── BookshelfWidget ──────────────────────────────────────────────────────────
 
@@ -230,6 +241,9 @@ end
 -- ─── _rebuild ─────────────────────────────────────────────────────────────────
 
 function BookshelfWidget:_rebuild()
+    local _perf_t0   = _gettime()
+    local _perf_chip = self.chip
+    local _perf_page = self.page
     -- Defer freeing the previous widget tree to the next UIManager tick.
     -- Calling :free() synchronously during an event handler tears down
     -- ImageWidget bb buffers that may still be referenced by an in-flight
@@ -435,6 +449,9 @@ function BookshelfWidget:_rebuild()
     -- the existing tree without rebuilding chips/shelves/pagination — see
     -- the fast-path in _previewBook below.
     local hero = self:_buildHero(content_w, hero_cover_w, hero_cover_h, hero_h, PAD)
+    local _perf_t1 = _gettime()
+    logger.dbg(string.format("[bookshelf perf] _rebuild: hero=%.0fms chip=%s page=%d",
+        (_perf_t1 - _perf_t0) * 1000, _perf_chip, _perf_page))
     -- Stash dimensions and the hero's parent vgroup so _previewBook can
     -- rebuild only the hero. Both the populated and empty-state branches
     -- below set _hero_parent at assembly time.
@@ -553,17 +570,26 @@ function BookshelfWidget:_rebuild()
     -- chip switches, while still letting the chevron pagination display
     -- "Page X of Y" accurately for any reasonable user.
     local MAX_FETCH  = 400
-    local all_items  = self:_fetchChipItems(MAX_FETCH) or {}
-    local total      = #all_items
+    local all_items, _total_hint = self:_fetchChipItems(MAX_FETCH)
+    all_items = all_items or {}
+    local _perf_t2 = _gettime()
+    logger.dbg(string.format("[bookshelf perf] _rebuild: fetch=%.0fms items=%d chip=%s",
+        (_perf_t2 - _perf_t1) * 1000, _total_hint or #all_items, _perf_chip))
+    local total      = _total_hint or #all_items
     local total_pages = math.max(1, math.ceil(total / PAGE_SIZE))
     if self.page > total_pages then self.page = total_pages end
     if self.page < 1 then self.page = 1 end
     -- Cache for the swipe handlers (which run outside _rebuild's scope).
     self._total_pages = total_pages
-    local start_idx  = (self.page - 1) * PAGE_SIZE + 1
-    local items      = {}
-    for i = 0, PAGE_SIZE - 1 do items[i + 1] = all_items[start_idx + i] end
-    local shown      = #items
+    -- all/folder chips return a pre-sliced page; others return the full list.
+    local items
+    if _total_hint then
+        items = all_items
+    else
+        local start_idx = (self.page - 1) * PAGE_SIZE + 1
+        items = {}
+        for i = 0, PAGE_SIZE - 1 do items[i + 1] = all_items[start_idx + i] end
+    end
     -- Only count non-nil entries (the last page may be partial).
     local shown_count = 0
     for i = 1, PAGE_SIZE do if items[i] then shown_count = shown_count + 1 end end
@@ -648,10 +674,15 @@ function BookshelfWidget:_rebuild()
             empty_vgroup,
         }
         self._sort_fingerprint = BookshelfWidget._computeSortFingerprint()
+        logger.dbg(string.format("[bookshelf perf] _rebuild: EMPTY total=%.0fms chip=%s",
+            (_gettime() - _perf_t0) * 1000, _perf_chip))
         return
     end
 
     local row_top, row_bottom = self:_buildShelfRows(items, content_w, shelf_h, PAD)
+    local _perf_t3 = _gettime()
+    logger.dbg(string.format("[bookshelf perf] _rebuild: shelves=%.0fms",
+        (_perf_t3 - _perf_t2) * 1000))
     local label_widget = self:_buildPaginationFooter(content_w, label_h, total_pages)
 
     -- Kick off BIM extraction for any displayed books with no cached
@@ -749,6 +780,8 @@ function BookshelfWidget:_rebuild()
         },
     }
     self._sort_fingerprint = BookshelfWidget._computeSortFingerprint()
+    logger.dbg(string.format("[bookshelf perf] _rebuild: TOTAL=%.0fms chip=%s page=%d/%d items=%d",
+        (_gettime() - _perf_t0) * 1000, _perf_chip, _perf_page, total_pages, total))
 end
 
 -- ─── Background metadata extraction ──────────────────────────────────────────
@@ -848,6 +881,8 @@ function BookshelfWidget:_kickOffMissingMetaExtraction(items, slot_w, slot_h, he
         hero_fp = cur and cur.filepath
     end
     if hero_fp then maybe_queue(hero_fp) end
+    logger.dbg(string.format("[bookshelf perf] _kickOffMeta: queued=%d displayed=%d",
+        #files, #(items or {})))
     if #files > 0 then
         UIManager:nextTick(function()
             pcall(function() BIM:extractInBackground(files) end)
@@ -967,15 +1002,20 @@ function BookshelfWidget:_fetchChipItems(n)
         end
         return fresh
     end
+    -- For the all-chip and folder drill-down, fetch only the current page
+    -- slice and return the total count as a second value. Callers use the
+    -- count to compute total_pages without hydrating the full item list.
+    local PAGE_SIZE = 8
+    local offset    = (self.page - 1) * PAGE_SIZE
     if tip and tip.kind == "folder" then
-        return Repo.getAll(tip.payload.path, n)
+        return Repo.getAll(tip.payload.path, PAGE_SIZE, offset)
     end
-    if self.chip == "all"       then return Repo.getAll(nil, n)     end
-    if self.chip == "recent"    then return Repo.getRecent(n)       end
-    if self.chip == "latest"    then return Repo.getLatest(n)       end
-    if self.chip == "series"    then return Repo.getSeriesGroups(n) end
-    if self.chip == "authors"   then return Repo.getAuthors(n)      end
-    if self.chip == "genres"    then return Repo.getGenres(n)       end
+    if self.chip == "all"       then return Repo.getAll(nil, PAGE_SIZE, offset) end
+    if self.chip == "recent"  then return Repo.getRecent(n)                       end
+    if self.chip == "latest"  then return Repo.getLatest(PAGE_SIZE, offset)       end
+    if self.chip == "series"  then return Repo.getSeriesGroups(PAGE_SIZE, offset) end
+    if self.chip == "authors" then return Repo.getAuthors(PAGE_SIZE, offset)      end
+    if self.chip == "genres"  then return Repo.getGenres(PAGE_SIZE, offset)       end
     if self.chip == "tags"      then return Repo.getTags(n)         end
     if self.chip == "favorites" then return Repo.getFavorites(n)    end
     return {}
@@ -1234,6 +1274,7 @@ end
 -- AND avoids the use-after-free path where _buildHero rebuilds a SpineWidget
 -- against a freed BIM bb on _preview_book.cover_bb.
 function BookshelfWidget:_swapShelvesInPlace()
+    local _perf_t0 = _gettime()
     if not self._inner_vgroup or not self._shelf_dims then
         self:_rebuild()
         UIManager:setDirty(self, "ui")
@@ -1242,8 +1283,12 @@ function BookshelfWidget:_swapShelvesInPlace()
     local d = self._shelf_dims
     local PAGE_SIZE = 8
     local MAX_FETCH = 400
-    local all_items = self:_fetchChipItems(MAX_FETCH) or {}
-    local total = #all_items
+    local all_items, _total_hint = self:_fetchChipItems(MAX_FETCH)
+    all_items = all_items or {}
+    local _perf_t1 = _gettime()
+    logger.dbg(string.format("[bookshelf perf] _swapShelves: fetch=%.0fms items=%d chip=%s",
+        (_perf_t1 - _perf_t0) * 1000, _total_hint or #all_items, self.chip))
+    local total = _total_hint or #all_items
     local total_pages = math.max(1, math.ceil(total / PAGE_SIZE))
     if self.page > total_pages then self.page = total_pages end
     if self.page < 1 then self.page = 1 end
@@ -1255,11 +1300,19 @@ function BookshelfWidget:_swapShelvesInPlace()
         UIManager:setDirty(self, "ui")
         return
     end
-    local start_idx = (self.page - 1) * PAGE_SIZE + 1
-    local items = {}
-    for i = 0, PAGE_SIZE - 1 do items[i + 1] = all_items[start_idx + i] end
+    local items
+    if _total_hint then
+        items = all_items
+    else
+        local start_idx = (self.page - 1) * PAGE_SIZE + 1
+        items = {}
+        for i = 0, PAGE_SIZE - 1 do items[i + 1] = all_items[start_idx + i] end
+    end
 
     local row_top, row_bottom = self:_buildShelfRows(items, d.content_w, d.shelf_h, d.PAD)
+    local _perf_t2 = _gettime()
+    logger.dbg(string.format("[bookshelf perf] _swapShelves: shelves=%.0fms",
+        (_perf_t2 - _perf_t1) * 1000))
     local footer = self:_buildPaginationFooter(d.content_w, d.label_h, total_pages)
 
     -- Kick off BIM extraction for newly-paginated books that aren't
@@ -1286,6 +1339,8 @@ function BookshelfWidget:_swapShelvesInPlace()
             if w and w.free then pcall(function() w:free() end) end
         end
     end)
+    logger.dbg(string.format("[bookshelf perf] _swapShelves: TOTAL=%.0fms page=%d/%d",
+        (_gettime() - _perf_t0) * 1000, self.page, self._total_pages or 0))
     UIManager:setDirty(self, "ui")
 end
 

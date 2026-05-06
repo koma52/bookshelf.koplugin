@@ -9,6 +9,16 @@
 
 local Repo = {}
 
+local logger = require("logger")
+-- Wall-clock timer. Falls back to os.clock() (CPU-only) if LuaSocket absent.
+local _gettime
+do
+    local ok, s = pcall(require, "socket")
+    _gettime = (ok and s and type(s.gettime) == "function")
+        and function() return s.gettime() end
+        or  os.clock
+end
+
 -- ─── Module-local helpers ────────────────────────────────────────────────────
 
 -- Split a comma-separated author string into a trimmed array, or return nil.
@@ -344,8 +354,8 @@ end
 -- Invalidation: TTL covers the steady state. main.lua's onCloseDocument hook
 -- calls Repo.invalidateWalkCache() so a session that closes a book and
 -- returns to Bookshelf picks up any sideloaded / moved files immediately.
-local WALK_CACHE_TTL = 30  -- seconds
-local _walk_cache = {}     -- { [key] = { list = {...}, expires_at = number } }
+local WALK_CACHE_TTL = 120  -- seconds; invalidateWalkCache() on onCloseDocument is the primary invalidation path
+local _walk_cache = {}      -- { [key] = { list = {...}, expires_at = number } }
 
 -- Series-groups cache. The walk-cache covers the lfs.dir + per-file mtime
 -- sweep, but getSeriesGroups also iterates EVERY candidate calling
@@ -363,12 +373,17 @@ local _series_cache    = {}  -- { [key] = { groups = {...}, expires_at = number 
 -- hazard from caching Book records doesn't apply.
 local _authors_cache   = {}
 local _genres_cache    = {}
+-- getAll result cache. FileChooser:genItemTableFromPath is expensive (2–5s
+-- on large home dirs); caches the shape (filepaths + folder labels) with the
+-- same TTL and invalidation path as the walk cache.
+local _all_cache       = {}  -- { [key] = { shapes = {...}, expires_at = number } }
 
 function Repo.invalidateWalkCache()
     _walk_cache    = {}
     _series_cache  = {}
     _authors_cache = {}
     _genres_cache  = {}
+    _all_cache     = {}
 end
 
 function Repo.invalidateSeriesCache()
@@ -414,30 +429,43 @@ local function cachedWalk(home, depth)
     local now = os.time()
     local entry = _walk_cache[key]
     if not entry or entry.expires_at <= now then
+        local _t0 = _gettime()
         local fresh = {}
         walkBooks(home, depth, fresh)
+        local _dt = (_gettime() - _t0) * 1000
         entry = { list = fresh, expires_at = now + WALK_CACHE_TTL }
         _walk_cache[key] = entry
+        logger.dbg(string.format("[bookshelf perf] cachedWalk: MISS walk=%.0fms files=%d depth=%s",
+            _dt, #fresh, tostring(depth)))
+    else
+        logger.dbg(string.format("[bookshelf perf] cachedWalk: HIT files=%d ttl_left=%ds",
+            #entry.list, entry.expires_at - now))
     end
     local copy = {}
     for i = 1, #entry.list do copy[i] = entry.list[i] end
     return copy
 end
 
-function Repo.getLatest(limit)
+function Repo.getLatest(limit, offset)
+    local _t0 = _gettime()
     local home       = G_reader_settings:readSetting("home_dir") or "/"
     local depth      = G_reader_settings:readSetting("bookshelf_latest_walk_depth") or 3
     local candidates = cachedWalk(home, depth)
     table.sort(candidates, function(a, b) return a.mtime > b.mtime end)
-    local out = {}
-    for i = 1, math.min(limit or 8, #candidates) do
+    offset      = offset or 0
+    local total = #candidates
+    local out   = {}
+    local stop  = math.min(offset + (limit or 8), total)
+    for i = offset + 1, stop do
         local book = Repo.buildBookMeta(candidates[i].fp)
         if book then
             book.added_time = candidates[i].mtime
             out[#out + 1] = book
         end
     end
-    return out
+    logger.dbg(string.format("[bookshelf perf] getLatest: %.0fms cands=%d items=%d/%d",
+        (_gettime() - _t0) * 1000, #candidates, #out, total))
+    return out, total
 end
 
 -- ─── getAll / findFirstBookIn ────────────────────────────────────────────────
@@ -493,15 +521,51 @@ function Repo.findFirstBookIn(path, max_depth)
     return nil
 end
 
-function Repo.getAll(path, limit)
+-- getAll(path, limit, offset) → (items, total)
+-- limit/offset let callers fetch a single page slice without hydrating the
+-- full list. total is always the full item count (from cache or fresh scan)
+-- so callers can compute total_pages without a second trip.
+function Repo.getAll(path, limit, offset)
+    local _t0 = _gettime()
+    offset = offset or 0
     path = path or G_reader_settings:readSetting("home_dir") or "/"
+    local now   = os.time()
+    local entry = _all_cache[path]
+    if entry and entry.expires_at > now then
+        -- HIT: hydrate only the requested slice — skips BIM lookups for
+        -- every item outside the current page.
+        local total = #entry.shapes
+        local out   = {}
+        local stop  = limit and math.min(offset + limit, total) or total
+        for i = offset + 1, stop do
+            local shape = entry.shapes[i]
+            if shape.kind == "folder" then
+                local fb = shape.first_book_fp and Repo.buildBookMeta(shape.first_book_fp)
+                out[#out + 1] = {
+                    kind       = "folder",
+                    path       = shape.path,
+                    label      = shape.label,
+                    first_book = fb,
+                }
+            else
+                local b = Repo.buildBookMeta(shape.fp)
+                if b then out[#out + 1] = b end
+            end
+        end
+        logger.dbg(string.format("[bookshelf perf] getAll: HIT hydrate=%.0fms items=%d/%d ttl_left=%ds",
+            (_gettime() - _t0) * 1000, #out, total, entry.expires_at - now))
+        return out, total
+    end
+
     local ok, FileChooser = pcall(require, "ui/widget/filechooser")
-    if not ok or not FileChooser then return {} end
+    if not ok or not FileChooser then return {}, 0 end
     local raw_items
     ok, raw_items = pcall(function() return FileChooser:genItemTableFromPath(path) end)
-    if not ok or type(raw_items) ~= "table" then return {} end
+    if not ok or type(raw_items) ~= "table" then return {}, 0 end
 
-    local out = {}
+    -- MISS: build the full list, cache all shapes, return just the slice.
+    local all_out = {}
+    local shapes  = {}
     for _, item in ipairs(raw_items) do
         -- FileChooser injects a "../ ⬆" go-up entry and an optional
         -- "Long-press here to choose current folder" entry. Skip both —
@@ -516,20 +580,36 @@ function Repo.getAll(path, limit)
                 local ext = item.path:match("%.([^.]+)$")
                 if ext and SUPPORTED_EXT[ext:lower()] then
                     local b = Repo.buildBookMeta(item.path)
-                    if b then out[#out + 1] = b end
+                    if b then
+                        all_out[#all_out + 1] = b
+                        shapes[#shapes + 1] = { kind = "book", fp = item.path }
+                    end
                 end
             elseif item.attr and item.attr.mode == "directory" then
-                out[#out + 1] = {
+                local fb = Repo.findFirstBookIn(item.path, 3)
+                all_out[#all_out + 1] = {
                     kind       = "folder",
                     path       = item.path,
                     label      = item.text,
-                    first_book = Repo.findFirstBookIn(item.path, 3),
+                    first_book = fb,
+                }
+                shapes[#shapes + 1] = {
+                    kind          = "folder",
+                    path          = item.path,
+                    label         = item.text,
+                    first_book_fp = fb and fb.filepath,
                 }
             end
-            if limit and #out >= limit then break end
         end
     end
-    return out
+    local total = #all_out
+    _all_cache[path] = { shapes = shapes, expires_at = now + WALK_CACHE_TTL }
+    local out  = {}
+    local stop = limit and math.min(offset + limit, total) or total
+    for i = offset + 1, stop do out[#out + 1] = all_out[i] end
+    logger.dbg(string.format("[bookshelf perf] getAll: MISS build=%.0fms items=%d/%d",
+        (_gettime() - _t0) * 1000, #out, total))
+    return out, total
 end
 
 -- ─── getFavorites ────────────────────────────────────────────────────────────
@@ -680,9 +760,17 @@ end
 -- skipping the lfs walk + the sort/group pass.
 local function hydrateSeriesShape(shape)
     local books = {}
-    for _, fp in ipairs(shape.filepaths) do
-        local b = Repo.buildBookMeta(fp)
-        if b then books[#books + 1] = b end
+    for i, fp in ipairs(shape.filepaths) do
+        if i <= 1 then
+            -- Full BIM hydration: cover_bb for the single front cover rendered
+            -- by SeriesStack. Only one cover is visible per group on the shelf.
+            local b = Repo.buildBookMeta(fp)
+            if b then books[#books + 1] = b end
+        else
+            -- Filepath stub: drilldown via _fetchChipItems calls buildBookMeta
+            -- per-book anyway, so the stub is sufficient for that path.
+            books[#books + 1] = { filepath = fp }
+        end
     end
     return {
         series_name = shape.series_name,
@@ -691,7 +779,7 @@ local function hydrateSeriesShape(shape)
     }
 end
 
-function Repo.getSeriesGroups(limit)
+function Repo.getSeriesGroups(limit, offset)
     local home  = G_reader_settings:readSetting("home_dir") or "/"
     local depth = G_reader_settings:readSetting("bookshelf_latest_walk_depth") or 3
     local key   = (home or "/") .. ":" .. tostring(depth or 0)
@@ -701,13 +789,20 @@ function Repo.getSeriesGroups(limit)
     -- renders; Books get rehydrated each read so cover_bbs are fresh.
     local cached = _series_cache[key]
     if cached and cached.expires_at > now then
-        local out = {}
-        for i = 1, math.min(limit or 4, #cached.groups) do
-            out[i] = hydrateSeriesShape(cached.groups[i])
+        local _t0   = _gettime()
+        local total = #cached.groups
+        local out   = {}
+        offset      = offset or 0
+        local stop  = math.min(offset + (limit or 8), total)
+        for i = offset + 1, stop do
+            out[#out + 1] = hydrateSeriesShape(cached.groups[i])
         end
-        return out
+        logger.dbg(string.format("[bookshelf perf] getSeriesGroups: HIT hydrate=%.0fms groups=%d/%d",
+            (_gettime() - _t0) * 1000, #out, total))
+        return out, total
     end
 
+    local _t0 = _gettime()
     -- Build a filepath → read-time map so the series sort still favours
     -- series you've actually been reading lately.
     local rh        = getReadHistory()
@@ -773,9 +868,14 @@ function Repo.getSeriesGroups(limit)
     end
     _series_cache[key] = { groups = shapes, expires_at = now + SERIES_CACHE_TTL }
 
-    local out = {}
-    for i = 1, math.min(limit or 4, #list) do out[i] = list[i] end
-    return out
+    local total = #list
+    local out   = {}
+    offset      = offset or 0
+    local stop  = math.min(offset + (limit or 8), total)
+    for i = offset + 1, stop do out[#out + 1] = list[i] end
+    logger.dbg(string.format("[bookshelf perf] getSeriesGroups: MISS build=%.0fms cands=%d groups=%d/%d",
+        (_gettime() - _t0) * 1000, #candidates, #out, total))
+    return out, total
 end
 
 -- ─── getAuthors / getGenres ──────────────────────────────────────────────────
@@ -795,9 +895,16 @@ end
 
 local function _hydrateGroupShape(shape)
     local books = {}
-    for _, fp in ipairs(shape.filepaths) do
-        local b = Repo.buildBookMeta(fp)
-        if b then books[#books + 1] = b end
+    for i, fp in ipairs(shape.filepaths) do
+        if i <= 1 then
+            -- Full BIM hydration: cover_bb for the single front cover rendered
+            -- by SeriesStack. Only one cover is visible per group on the shelf.
+            local b = Repo.buildBookMeta(fp)
+            if b then books[#books + 1] = b end
+        else
+            -- Stub: drilldown re-hydrates via _fetchChipItems anyway.
+            books[#books + 1] = { filepath = fp }
+        end
     end
     return {
         kind        = shape.kind,
@@ -812,6 +919,7 @@ end
 -- key_fn: (book) -> string | nil  for single-key (multi=false)
 -- key_fn: (book) -> table[string] | nil  for multi-key (multi=true)
 local function _buildGroups(group_kind, key_fn, multi)
+    local _t0 = _gettime()
     local home  = G_reader_settings:readSetting("home_dir") or "/"
     local depth = G_reader_settings:readSetting("bookshelf_latest_walk_depth") or 3
     -- Read history → filepath read-time map so groups sort by recently-read.
@@ -864,6 +972,8 @@ local function _buildGroups(group_kind, key_fn, multi)
             return (a.title or "") < (b.title or "")
         end)
     end
+    logger.dbg(string.format("[bookshelf perf] _buildGroups(%s): %.0fms cands=%d groups=%d",
+        group_kind, (_gettime() - _t0) * 1000, #cands, #list))
     return list
 end
 
@@ -882,13 +992,15 @@ local function _cacheGroupShapes(list, kind)
     return shapes
 end
 
-function Repo.getAuthors(limit)
+function Repo.getAuthors(limit, offset)
+    local _t0 = _gettime()
     local home  = G_reader_settings:readSetting("home_dir") or "/"
     local depth = G_reader_settings:readSetting("bookshelf_latest_walk_depth") or 3
     local key   = (home or "/") .. ":" .. tostring(depth or 0)
     local now   = os.time()
     local cached = _authors_cache[key]
-    if not cached or cached.expires_at <= now then
+    local _hit = cached and cached.expires_at > now
+    if not _hit then
         local list = _buildGroups("author", function(b) return b.author end, false)
         _authors_cache[key] = {
             groups     = _cacheGroupShapes(list, "author"),
@@ -901,20 +1013,27 @@ function Repo.getAuthors(limit)
     -- and the resulting shared cover_bb segfaults when one SeriesStack
     -- frees it while another still holds the reference. Hydrating from
     -- shapes calls buildBookMeta per group → independent cover_bbs.
-    local out = {}
-    for i = 1, math.min(limit or 8, #cached.groups) do
-        out[i] = _hydrateGroupShape(cached.groups[i])
+    local total = #cached.groups
+    local out   = {}
+    offset      = offset or 0
+    local stop  = math.min(offset + (limit or 8), total)
+    for i = offset + 1, stop do
+        out[#out + 1] = _hydrateGroupShape(cached.groups[i])
     end
-    return out
+    logger.dbg(string.format("[bookshelf perf] getAuthors: %s %.0fms groups=%d/%d",
+        _hit and "HIT" or "MISS", (_gettime() - _t0) * 1000, #out, total))
+    return out, total
 end
 
-function Repo.getGenres(limit)
+function Repo.getGenres(limit, offset)
+    local _t0 = _gettime()
     local home  = G_reader_settings:readSetting("home_dir") or "/"
     local depth = G_reader_settings:readSetting("bookshelf_latest_walk_depth") or 3
     local key   = (home or "/") .. ":" .. tostring(depth or 0)
     local now   = os.time()
     local cached = _genres_cache[key]
-    if not cached or cached.expires_at <= now then
+    local _hit = cached and cached.expires_at > now
+    if not _hit then
         local list = _buildGroups("genre", function(b) return b.genres end, true)
         _genres_cache[key] = {
             groups     = _cacheGroupShapes(list, "genre"),
@@ -927,11 +1046,16 @@ function Repo.getGenres(limit)
     -- groups; without fresh Book records per group both SeriesStacks
     -- share the same cover_bb and the first to free it segfaults the
     -- second. This was the cause of the genres-tab crash on first tap.
-    local out = {}
-    for i = 1, math.min(limit or 8, #cached.groups) do
-        out[i] = _hydrateGroupShape(cached.groups[i])
+    local total = #cached.groups
+    local out   = {}
+    offset      = offset or 0
+    local stop  = math.min(offset + (limit or 8), total)
+    for i = offset + 1, stop do
+        out[#out + 1] = _hydrateGroupShape(cached.groups[i])
     end
-    return out
+    logger.dbg(string.format("[bookshelf perf] getGenres: %s %.0fms groups=%d/%d",
+        _hit and "HIT" or "MISS", (_gettime() - _t0) * 1000, #out, total))
+    return out, total
 end
 
 -- ─── enrichStats ─────────────────────────────────────────────────────────────

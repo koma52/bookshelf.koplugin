@@ -58,9 +58,13 @@ local ChipStrip = InputContainer:extend{
 -- small horizontal pad so a long chip name like "FAVOURITES" fits and a
 -- short one like "RECENT" doesn't waste space. Outline (rather than
 -- filled black) keeps the pill reading as clickable rather than as a
--- selected/active chip. Returns (widget, total_w, tip_w) so the caller
--- can lay out the post-pill gap and record the tap zone.
-local function arrowPillFrame(label, h)
+-- selected/active chip.
+--
+-- When `chained` is true the LEFT border is omitted so the pill connects
+-- seamlessly with a preceding pill's arrow tip (no double black line at
+-- the join). Returns (widget, total_w, tip_w) so the caller can lay out
+-- adjacent pills and record the tap zone.
+local function arrowPillFrame(label, h, chained)
     local label_text = (label or ""):upper()
     local face       = Font:getFace("infofont", 16)
     local tw = TextWidget:new{
@@ -98,15 +102,18 @@ local function arrowPillFrame(label, h)
                 bb:paintRect(x + body_w, y + dy, row_w, 1, BLACK)
             end
         end
-        -- Inner filled white (inset by `b`): body shrunk on top/bottom/
-        -- left, tip shrunk by ~2*b in width so the slope's outline reads
-        -- roughly uniform thickness around the curve.
+        -- Inner filled white (inset by `b`): body shrunk on top/bottom
+        -- and (unless chained) left; tip shrunk by ~2*b in width so the
+        -- slope's outline reads roughly uniform thickness. When chained,
+        -- the left edge has no border — the previous pill's arrow tip
+        -- meets pure white interior here.
         local inner_h = h - 2 * b
         if inner_h <= 0 then return end
-        local inner_hh = (inner_h - 1) / 2
-        local inner_body_w = body_w - b
+        local inner_hh    = (inner_h - 1) / 2
+        local left_inset  = chained and 0 or b
+        local inner_body_w = body_w - left_inset
         if inner_body_w > 0 then
-            bb:paintRect(x + b, y + b, inner_body_w, inner_h, WHITE)
+            bb:paintRect(x + left_inset, y + b, inner_body_w, inner_h, WHITE)
         end
         local inner_tip_w = tip_w - 2 * b
         if inner_tip_w > 0 then
@@ -211,21 +218,24 @@ end
 -- resolves) so the existing tap pipeline keeps working in both modes.
 
 function ChipStrip:_initBreadcrumb()
-    -- Each crumb in the path is its own arrow-pill (same outlined style
-    -- as the chip pill) — chained breadcrumb of "tabs" rather than a
-    -- chip pill followed by chevron-separated text. Tap any pill to
-    -- pop to that depth.
+    -- Layout: chip pill + (parent crumbs as CHAINED arrow pills, no
+    -- gaps) + small gap + the deepest crumb as PLAIN TEXT (the
+    -- current/active folder isn't a tap target — you're already
+    -- there). Chip pill keeps its left border; subsequent pills are
+    -- "chained" (no left border) so the previous tip meets pure white
+    -- interior, joining the chain visually.
     local face_text = Font:getFace("infofont", 16)
+    local n         = #self.breadcrumb_path
 
-    -- Chip pill at depth 0 (e.g. "HOME").
-    local pill, pill_w, pill_tip_w = arrowPillFrame(self.chip_pill_label or "", self.height)
+    -- Chip pill at depth 0 (e.g. "HOME") — full border (chained=false).
+    local pill, pill_w, pill_tip_w = arrowPillFrame(self.chip_pill_label or "", self.height, false)
 
-    -- Build a pill for each crumb. Strip a trailing "/" defensively in
-    -- case the upstream label still carries one.
+    -- Build chained pills for parent entries (1..n-1), skipping the
+    -- deepest. Strip a trailing "/" defensively.
     local crumb_pills = {}
-    for i, p in ipairs(self.breadcrumb_path) do
-        local label = (p.label or ""):gsub("/$", "")
-        local cp_widget, cp_w, cp_tip_w = arrowPillFrame(label, self.height)
+    for i = 1, n - 1 do
+        local label = (self.breadcrumb_path[i].label or ""):gsub("/$", "")
+        local cp_widget, cp_w, cp_tip_w = arrowPillFrame(label, self.height, true)
         crumb_pills[#crumb_pills + 1] = {
             widget = cp_widget,
             width  = cp_w,
@@ -234,33 +244,46 @@ function ChipStrip:_initBreadcrumb()
         }
     end
 
-    -- Layout: chip_pill, gap, crumb_pill, gap, crumb_pill, ...
-    -- Gap between pills is the tip width of the previous pill — the
-    -- arrow tip points "into" the next pill at a balanced offset.
+    -- Plain-text widget for the deepest crumb (the current folder).
+    local deepest_widget, deepest_w
+    if n >= 1 then
+        local deepest_label = (self.breadcrumb_path[n].label or ""):gsub("/$", "")
+        deepest_widget = TextWidget:new{
+            text    = deepest_label,
+            face    = face_text,
+            bold    = true,
+            fgcolor = Blitbuffer.COLOR_BLACK,
+        }
+        deepest_w = deepest_widget:getSize().w
+    end
+
+    -- Layout: pills connect with no gap; small gap before plain text.
     local function build(visible_crumbs)
         local row    = HorizontalGroup:new{ pill }
         local zones  = { { x = 0, w = pill_w, depth = 0 } }
         local cursor = pill_w
-        local prev_tip = pill_tip_w
         for _, cp in ipairs(visible_crumbs) do
-            row[#row + 1] = HorizontalSpan:new{ width = prev_tip }
-            cursor = cursor + prev_tip
             row[#row + 1] = cp.widget
             zones[#zones + 1] = { x = cursor, w = cp.width, depth = cp.depth }
             cursor = cursor + cp.width
-            prev_tip = cp.tip_w
+        end
+        if deepest_widget then
+            local gap_w = pill_tip_w
+            row[#row + 1] = HorizontalSpan:new{ width = gap_w }
+            cursor = cursor + gap_w
+            row[#row + 1] = deepest_widget
+            cursor = cursor + deepest_w
+            -- No tap zone for the current/active crumb — you're already there.
         end
         return row, zones, cursor
     end
 
-    -- Truncate from the front (drop earliest crumbs first) until the
+    -- Truncate from the front (drop earliest parent pills) until the
     -- chain fits the strip's width. The chip pill + the deepest crumb
-    -- always survive. If even those two don't fit there's no clean
-    -- truncation point — the deepest pill renders past the right edge
-    -- but tap zones still work for the chip pill at depth 0.
+    -- always survive (chip = depth 0, deepest = current folder).
     local visible = crumb_pills
     local row, zones, total_w = build(visible)
-    while total_w > self.width and #visible > 1 do
+    while total_w > self.width and #visible > 0 do
         table.remove(visible, 1)
         row, zones, total_w = build(visible)
     end

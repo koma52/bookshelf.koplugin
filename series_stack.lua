@@ -178,21 +178,24 @@ function SeriesStack:init()
             bold = true,
         }
     }
-    local badge_h     = badge_inner:getSize().h
-    local band_bottom = band_top + band_h
-    -- Anchor: badge's vertical centre = band's bottom edge → top half on the
-    -- band, bottom half below. CenterContainer width = self.width centres
-    -- the badge horizontally within the cover slot.
-    local badge_top   = math.max(0, band_bottom - math.floor(badge_h / 2))
-    local badge = FrameContainer:new{
-        bordersize  = 0,
-        padding     = 0,
-        padding_top = badge_top,
-        CenterContainer:new{
-            dimen = Geom:new{ w = self.width, h = badge_h },
-            badge_inner,
-        },
-    }
+    local badge_w = badge_inner:getSize().w
+    local badge_h = badge_inner:getSize().h
+    -- Position the badge centred on the front cover's top-right corner so
+    -- it reads as a notification overlay on the cover itself. The cover's
+    -- right edge in OverlapGroup coords is (SLIP_OVERHANG + card_w), where
+    -- card_w accounts for the SpineWidget's own SHADOW_OFFSET on its right
+    -- side. Top edge clamped to 0 so we don't paint past the slot top.
+    local SHADOW_OFFSET = Screen:scaleBySize(4)
+    local cover_right_x = self.width - SLIP_OVERHANG - SHADOW_OFFSET
+    local badge_x = math.max(0, math.min(self.width - badge_w,
+                                         cover_right_x - math.floor(badge_w / 2)))
+    -- Lifted by SHADOW_OFFSET so the badge sits proud of the cover top
+    -- rather than flush against it — visually echoes the cover's own
+    -- bottom-right shadow allocation, and gives the digits some breathing
+    -- room above the cover image.
+    local badge_y = -SHADOW_OFFSET
+    badge_inner.overlap_offset = { badge_x, badge_y }
+    local badge = badge_inner
 
     self[1] = OverlapGroup:new{
         dimen = self.dimen,

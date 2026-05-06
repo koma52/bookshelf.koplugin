@@ -242,15 +242,17 @@ function FolderStack:init()
     }
 
     -- Folder label: in the rectangle area below max(y_left, y_right)
-    -- where the cardboard is full width. Left-aligned text — the slope
-    -- visually anchors content to the right, so left alignment reads
-    -- as "label flush with the back wall". Probe-then-build pattern
-    -- to get true vertical centring within the rectangle.
+    -- where the cardboard is full width. Left-aligned text, top-aligned
+    -- vertically (renders flush against the rectangle's top edge with
+    -- a generous interior padding). Probe-then-build pattern still
+    -- caps the widget height at the available rectangle height so a
+    -- long folder name truncates with "…" instead of overflowing.
     local label_text = self.folder and self.folder.label or ""
     label_text = label_text:gsub("/$", "")
-    local label_top     = math.max(y_left, y_right) + Size.padding.small
-    local label_h_avail = card_h - label_top - Size.padding.small
-    local label_w_avail = card_w - Size.padding.default * 2
+    local label_pad     = Size.padding.large
+    local label_top     = math.max(y_left, y_right) + label_pad
+    local label_h_avail = card_h - label_top - label_pad
+    local label_w_avail = card_w - label_pad * 2
     local face          = Font:getFace("infofont", 14)
     local probe = TextBoxWidget:new{
         text  = label_text,
@@ -273,19 +275,16 @@ function FolderStack:init()
         height                        = label_h,
         height_overflow_show_ellipsis = not fits,
     }
-    -- Vertical centring via CenterContainer of the full available
-    -- height; the label widget is left-aligned within so the
-    -- horizontal padding sits naturally on the left side.
-    local label_centered = CenterContainer:new{
-        dimen = Geom:new{ w = label_w_avail, h = label_h_avail },
-        label_widget,
-    }
+    -- Top-aligned: the label widget paints starting at label_top with
+    -- label_pad of inset on the left. No CenterContainer — the
+    -- FrameContainer padding directly positions the label at the top
+    -- of the rectangle region.
     local label_positioned = FrameContainer:new{
         bordersize    = 0,
         padding       = 0,
         padding_top   = label_top,
-        padding_left  = Size.padding.default,
-        label_centered,
+        padding_left  = label_pad,
+        label_widget,
     }
 
     self[1] = OverlapGroup:new{

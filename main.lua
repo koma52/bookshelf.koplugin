@@ -390,12 +390,32 @@ function Bookshelf:onDispatcherRegisterActions()
     })
 end
 
--- Toggle visibility — close the live widget if showing, otherwise show.
+-- _safeShow — show bookshelf, doing the right thing depending on whether
+-- the action was invoked from FM (overlay bookshelf directly) or from the
+-- reader (close the document first, then schedule the show on the next
+-- tick). Overlaying bookshelf on an actively-painting reader produces a
+-- partial-paint glitch where reader pixels bleed through behind the
+-- bookshelf widget; closing first puts FM under bookshelf, where it was
+-- always meant to live.
+function Bookshelf:_safeShow()
+    if self.ui and self.ui.document then
+        self.ui:onClose()
+        -- onCloseDocument fires synchronously here. If start_with=bookshelf
+        -- it'll schedule its own show() — duplicate is idempotent because
+        -- Bookshelf:show() reuses an existing widget. We schedule too so
+        -- the gesture works regardless of the user's start_with setting.
+        UIManager:nextTick(function() self:show() end)
+    else
+        self:show()
+    end
+end
+
+-- Toggle visibility — close the live widget if showing, otherwise safe-show.
 function Bookshelf:onToggleBookshelf()
     if self:_isShowing() then
         UIManager:close(self._widget)
     else
-        self:show()
+        self:_safeShow()
     end
     return true
 end
@@ -404,7 +424,7 @@ end
 -- Hide is a no-op when nothing's showing, mirroring how Set Bookends behaves.
 function Bookshelf:onSetBookshelf(visible)
     if visible then
-        if not self:_isShowing() then self:show() end
+        if not self:_isShowing() then self:_safeShow() end
     else
         if self:_isShowing() then UIManager:close(self._widget) end
     end

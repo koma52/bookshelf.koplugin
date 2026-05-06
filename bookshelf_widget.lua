@@ -433,8 +433,10 @@ function BookshelfWidget:_rebuild()
     end
     -- Search-mode chip pill: shows the search nerd-font glyph (U+F002)
     -- followed by "Search results" so the user reads
-    -- "[search-icon] SEARCH RESULTS > query" — search is a separate
-    -- context, not a filter applied within the active chip.
+    -- "< Back  [search-icon] SEARCH RESULTS > query". The Back pill is an
+    -- explicit exit from search mode; tapping the chip pill or the query
+    -- crumb re-opens the search dialog with the current query prefilled
+    -- (lets the user fix typos without starting over).
     local chip_pill_glyph = in_search_mode and "\xEF\x80\x82" or nil
     local chip_pill_label
     if in_search_mode then
@@ -442,6 +444,7 @@ function BookshelfWidget:_rebuild()
     else
         chip_pill_label = CHIP_LABELS[self.chip] or self.chip
     end
+    local back_label = in_search_mode and "< Back" or nil
     local chips = not hide_chip_strip and ChipStrip:new{
         chips             = active_chips,
         active            = self.chip,
@@ -450,6 +453,7 @@ function BookshelfWidget:_rebuild()
         breadcrumb_path   = breadcrumb_path,
         chip_pill_label   = chip_pill_label,
         chip_pill_glyph   = chip_pill_glyph,
+        back_label        = back_label,
         on_change = function(key)
             -- Search "chip" is an action, not a navigable tab — open
             -- the search dialog and bail before switching self.chip.
@@ -471,8 +475,26 @@ function BookshelfWidget:_rebuild()
             UIManager:setDirty(self, "ui")
         end,
         on_breadcrumb = function(depth)
-            -- depth 0 = chip pill (back to top level for this chip).
-            -- depth N = pop the path so the Nth crumb is the deepest.
+            -- depth -1 = back pill (search mode only): exit search
+            --            entirely, restoring the prior drilldown path.
+            -- depth  0 = chip pill: in search mode, re-open the search
+            --            dialog with the current query prefilled (so the
+            --            user can fix typos without retyping); in other
+            --            drilldowns, pop to top of current chip.
+            -- depth  N = crumb at index N: in search mode for the deepest
+            --            crumb (= query), same edit-search behaviour as
+            --            the chip pill; otherwise pop to that level.
+            if depth == -1 then
+                self:_drillBackTo(0)
+                return
+            end
+            if in_search_mode then
+                local search_entry = self._drilldown_path[#self._drilldown_path]
+                local query = search_entry and search_entry.payload
+                              and search_entry.payload.query
+                self:_openSearchDialog(query)
+                return
+            end
             self:_drillBackTo(depth)
         end,
     }
@@ -1966,12 +1988,12 @@ end
 -- (kind = "search") so the breadcrumb arrow pill doubles as a "back to
 -- whatever I was on" affordance and the existing east-swipe / chip-pill
 -- tap clears the search.
-function BookshelfWidget:_openSearchDialog()
+function BookshelfWidget:_openSearchDialog(prefill)
     local InputDialog = require("ui/widget/inputdialog")
     local dlg
     dlg = InputDialog:new{
         title      = _("Search library"),
-        input      = "",
+        input      = prefill or "",
         input_hint = _("title, author, series, genre…"),
         buttons = {
             {
@@ -2005,7 +2027,20 @@ function BookshelfWidget:_searchAndDrill(query)
     -- back-out path restores it (a folder browse + search-then-back
     -- shouldn't drop the folder context). The active chip is preserved
     -- by self.chip — _drillBackTo to depth 0 leaves us on it.
-    local prior_path = self._drilldown_path
+    --
+    -- Re-search-from-search special case: if the existing top-of-path is
+    -- a search entry (user tapped the chip pill / query crumb to edit
+    -- their query), inherit ITS prior_drilldown rather than nesting
+    -- search-on-search. Otherwise repeated edits would stack search
+    -- entries forever, and back-out would walk through every prior
+    -- query before reaching the original drilldown.
+    local prior_path
+    local current_top = self._drilldown_path[#self._drilldown_path]
+    if current_top and current_top.kind == "search" and current_top.prior_drilldown then
+        prior_path = current_top.prior_drilldown
+    else
+        prior_path = self._drilldown_path
+    end
     self._drilldown_path = {}
     self:_drillInto{
         kind            = "search",

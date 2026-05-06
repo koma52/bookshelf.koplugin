@@ -47,6 +47,7 @@ local ChipStrip = InputContainer:extend{
     breadcrumb_path   = nil,   -- list of { label } — when non-empty, breadcrumb mode
     chip_pill_label   = nil,   -- label for the chip pill in breadcrumb mode (e.g. "Series")
     chip_pill_glyph   = nil,   -- nerd-font glyph for the chip pill (overrides label)
+    back_label        = nil,   -- when set, prepend a Back pill (depth -1) before the chip pill
     width             = nil,
     height            = nil,
     on_change         = nil,   -- function(key) — chips mode tap
@@ -342,13 +343,27 @@ function ChipStrip:_initBreadcrumb()
     local face_text = Font:getFace("infofont", 16)
     local n         = #self.breadcrumb_path
 
-    -- Chip pill at depth 0 (e.g. "HOME") — chained=false (full border).
-    -- chip_pill_glyph wins over chip_pill_label when set: search mode
-    -- replaces the chip name with the search icon so the user sees
+    -- Optional Back pill before the chip pill — fires on_breadcrumb(-1)
+    -- so the parent widget can interpret "user wants out of this drill"
+    -- as something different from "user wants to tap the chip pill"
+    -- (which in search mode now means "edit the query"). Used only by
+    -- search mode today; non-search drilldowns leave back_label nil and
+    -- the strip starts straight with the chip pill as before.
+    local back_pill, back_pill_w
+    local has_back = type(self.back_label) == "string" and self.back_label ~= ""
+    if has_back then
+        back_pill, back_pill_w = arrowPillFrame(self.back_label, self.height, false)
+    end
+
+    -- Chip pill at depth 0 (e.g. "HOME"). chained=true when there's a
+    -- Back pill before it so the two visually butt together; otherwise
+    -- the chip pill is chained=false (full border) as the strip's leftmost
+    -- element. chip_pill_glyph wins over chip_pill_label when set: search
+    -- mode replaces the chip name with the search icon so the user sees
     -- they're in a separate "search" context, not nested under their
     -- previously-active chip.
     local pill, pill_w, pill_tip_w = arrowPillFrame(
-        self.chip_pill_label or "", self.height, false, self.chip_pill_glyph)
+        self.chip_pill_label or "", self.height, has_back, self.chip_pill_glyph)
 
     -- Chained pills for parent entries (1..n-1).
     local crumb_pills = {}
@@ -381,9 +396,17 @@ function ChipStrip:_initBreadcrumb()
     -- pill's tip overhangs into the next pill's notch area — pills
     -- visually overlap by tip_w and chain together.
     local function build(visible_pills)
-        local row    = HorizontalGroup:new{ pill }
-        local zones  = { { x = 0, w = pill_w, depth = 0 } }
-        local cursor = pill_w
+        local row    = HorizontalGroup:new{}
+        local zones  = {}
+        local cursor = 0
+        if has_back then
+            row[#row + 1] = back_pill
+            zones[#zones + 1] = { x = cursor, w = back_pill_w, depth = -1 }
+            cursor = cursor + back_pill_w
+        end
+        row[#row + 1] = pill
+        zones[#zones + 1] = { x = cursor, w = pill_w, depth = 0 }
+        cursor = cursor + pill_w
         for _, cp in ipairs(visible_pills) do
             row[#row + 1] = cp.widget
             zones[#zones + 1] = { x = cursor, w = cp.width, depth = cp.depth }
@@ -398,6 +421,11 @@ function ChipStrip:_initBreadcrumb()
             row[#row + 1] = HorizontalSpan:new{ width = gap_w }
             cursor = cursor + gap_w
             row[#row + 1] = deepest_widget
+            -- Register a tap zone for the deepest crumb. The previous
+            -- behaviour left it inert (depth = #path was a no-op for
+            -- _drillBackTo), but search mode now uses this as a second
+            -- "edit query" affordance alongside the chip pill.
+            zones[#zones + 1] = { x = cursor, w = deepest_w, depth = n }
             cursor = cursor + deepest_w
         end
         return row, zones, cursor

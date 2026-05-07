@@ -403,5 +403,94 @@ test("getSeriesGroups: cache skips lfs walk; bbs rebuilt fresh per call", functi
 end)
 
 -- ============================================================================
+-- searchAll
+-- ============================================================================
+
+test("searchAll: returns empty result for blank query", function()
+    Repo.invalidateWalkCache()
+    local r = Repo.searchAll("")
+    assert(type(r) == "table")
+    assert(#(r.books   or {}) == 0)
+    assert(#(r.folders or {}) == 0)
+    assert(#(r.authors or {}) == 0)
+    assert(#(r.series  or {}) == 0)
+    assert(#(r.genres  or {}) == 0)
+end)
+
+test("searchAll: matches books by title", function()
+    Repo.invalidateWalkCache()
+    package.loaded["libs/libkoreader-lfs"].dir = function(path)
+        local files = (path == "/lib") and {".", "..", "dune.epub", "foundation.epub"} or {".", ".."}
+        local i = 0; return function() i = i+1; return files[i] end
+    end
+    package.loaded["libs/libkoreader-lfs"].attributes = function(fp, key)
+        if key == "mode" then return "file" end
+        return 0
+    end
+    _G._test_settings  = { home_dir = "/lib", bookshelf_latest_walk_depth = 1 }
+    _G._test_bim_data  = {
+        ["/lib/dune.epub"]       = { title = "Dune", authors = "Frank Herbert" },
+        ["/lib/foundation.epub"] = { title = "Foundation", authors = "Isaac Asimov" },
+    }
+    local r = Repo.searchAll("dune")
+    assert(#r.books == 1, "expected 1 book, got " .. #r.books)
+    assert(r.books[1].title == "Dune")
+end)
+
+test("searchAll: matches author groups by name", function()
+    Repo.invalidateWalkCache()
+    package.loaded["libs/libkoreader-lfs"].dir = function(path)
+        local files = (path == "/lib") and {".", "..", "dune.epub", "foundation.epub"} or {".", ".."}
+        local i = 0; return function() i = i+1; return files[i] end
+    end
+    package.loaded["libs/libkoreader-lfs"].attributes = function(fp, key)
+        if key == "mode" then return "file" end
+        return 0
+    end
+    _G._test_settings = { home_dir = "/lib", bookshelf_latest_walk_depth = 1 }
+    _G._test_bim_data = {
+        ["/lib/dune.epub"]       = { title = "Dune",       authors = "Frank Herbert" },
+        ["/lib/foundation.epub"] = { title = "Foundation", authors = "Isaac Asimov" },
+    }
+    Repo.invalidateSeriesCache()
+    local r = Repo.searchAll("asimov")
+    assert(#r.authors == 1, "expected 1 author group, got " .. #r.authors)
+    assert(r.authors[1].series_name == "Isaac Asimov",
+        "expected Isaac Asimov got " .. tostring(r.authors[1].series_name))
+    assert(#r.authors[1].books == 1)
+end)
+
+test("searchAll: matches folders by directory name", function()
+    Repo.invalidateWalkCache()
+    package.loaded["libs/libkoreader-lfs"].dir = function(path)
+        if path == "/lib" then
+            local files = {".", "..", "scifi"}
+            local i = 0; return function() i=i+1; return files[i] end
+        elseif path == "/lib/scifi" then
+            local files = {".", "..", "dune.epub"}
+            local i = 0; return function() i=i+1; return files[i] end
+        else
+            local files = {".", ".."}
+            local i = 0; return function() i=i+1; return files[i] end
+        end
+    end
+    package.loaded["libs/libkoreader-lfs"].attributes = function(fp, key)
+        if key == "mode" then
+            if fp == "/lib/scifi" then return "directory" end
+            return "file"
+        end
+        return 0
+    end
+    _G._test_settings = { home_dir = "/lib", bookshelf_latest_walk_depth = 2 }
+    _G._test_bim_data = { ["/lib/scifi/dune.epub"] = { title = "Dune", authors = "Frank Herbert" } }
+    local r = Repo.searchAll("scifi")
+    assert(#r.folders == 1, "expected 1 folder, got " .. #r.folders)
+    assert(r.folders[1].label == "scifi")
+    assert(r.folders[1].kind  == "folder")
+    assert(r.folders[1].path  == "/lib/scifi")
+    assert(r.folders[1].first_book ~= nil)
+end)
+
+-- ============================================================================
 io.write(string.format("\n%d passed, %d failed\n", pass, fail))
 os.exit(fail == 0 and 0 or 1)

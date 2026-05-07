@@ -1185,6 +1185,71 @@ function Repo.getGenres(limit, offset)
     return out, total
 end
 
+-- ─── searchAll ───────────────────────────────────────────────────────────────
+-- Returns { folders, authors, series, genres, books } for a query string.
+-- All matching is case-insensitive substring. Returns empty lists immediately
+-- for a blank query.
+function Repo.searchAll(query)
+    local empty = { folders = {}, authors = {}, series = {}, genres = {}, books = {} }
+    if not query or query == "" then return empty end
+    local q = query:lower()
+
+    -- ── folders ──
+    -- Derive from the already-cached walk: unique parent directories whose
+    -- basename matches the query. No disk I/O: cachedWalk returns { fp, mtime }.
+    local home  = G_reader_settings:readSetting("home_dir") or "/"
+    local depth = G_reader_settings:readSetting("bookshelf_latest_walk_depth") or 3
+    local key   = (home or "/") .. ":" .. tostring(depth or 0)
+    local cands = cachedWalk(home, depth)
+    local seen_dirs = {}
+    local folders = {}
+    for _, c in ipairs(cands) do
+        local dir = c.fp:match("^(.*)/[^/]+$") or "/"
+        if not seen_dirs[dir] then
+            seen_dirs[dir] = true
+            local basename = dir:match("([^/]+)$") or dir
+            if basename:lower():find(q, 1, true) then
+                local first_book = Repo.buildBookMeta(c.fp)
+                folders[#folders + 1] = {
+                    kind       = "folder",
+                    path       = dir,
+                    label      = basename,
+                    first_book = first_book,
+                }
+            end
+        end
+    end
+
+    -- ── author / series / genre groups ──
+    -- Warm each shape cache with limit=0 (populates the cache without
+    -- hydrating any groups — in Lua, 0 is truthy so `0 or 8` = 0, giving
+    -- an empty loop but still running the _buildGroups fill). Then iterate
+    -- shapes directly and hydrate only matching entries, avoiding the cost
+    -- of hydrating the full collection just to filter it.
+    local function matchGroups(cache_table)
+        if not cache_table[key] then return {} end
+        local out = {}
+        for _, shape in ipairs(cache_table[key].groups) do
+            if (shape.series_name or ""):lower():find(q, 1, true) then
+                out[#out + 1] = _hydrateGroupShape(shape)
+            end
+        end
+        return out
+    end
+    if not _authors_cache[key] then Repo.getAuthors(0, 0) end
+    if not _series_cache[key]  then Repo.getSeriesGroups(0, 0) end
+    if not _genres_cache[key]  then Repo.getGenres(0, 0) end
+
+    local authors = matchGroups(_authors_cache)
+    local series  = matchGroups(_series_cache)
+    local genres  = matchGroups(_genres_cache)
+
+    -- ── books ──
+    local books = Repo.searchBooks(query, 200) or {}
+
+    return { folders = folders, authors = authors, series = series, genres = genres, books = books }
+end
+
 -- ─── enrichStats ─────────────────────────────────────────────────────────────
 -- Mutates `book` in-place with statistics fields from readerstatistics.
 -- Graceful no-op when the statistics plugin is absent or its API method is nil.

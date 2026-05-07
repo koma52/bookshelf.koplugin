@@ -805,6 +805,9 @@ end
 
 -- ─── Background metadata extraction ──────────────────────────────────────────
 
+local BIM_POLL_INTERVAL_S  = 3
+local BIM_POLL_MAX_ATTEMPTS = 20
+
 -- _kickOffMissingMetaExtraction(items, slot_w, slot_h)
 -- BookInfoManager only knows about books KOReader has already indexed. Books
 -- the user has dropped into their library but never opened (typical for a
@@ -932,8 +935,6 @@ end
 -- BIM_POLL_MAX_ATTEMPTS attempts (≈ 60s) — the typical extraction
 -- subprocess completes well within that window. Cancels any earlier
 -- polling timer so consecutive renders don't stack timers.
-local BIM_POLL_INTERVAL_S  = 3
-local BIM_POLL_MAX_ATTEMPTS = 20
 function BookshelfWidget:_armExtractionPoll(pending_files)
     if self._bim_poll_fn then
         UIManager:unschedule(self._bim_poll_fn)

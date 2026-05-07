@@ -338,7 +338,12 @@ function Bookshelf:addToMainMenu(menu_items)
         sub_item_table = {
             {
                 text     = _("Scan all library metadata"),
-                callback = function() outer:scanAllMetadata() end,
+                callback = function(touchmenu_instance)
+                    if touchmenu_instance then
+                        UIManager:close(touchmenu_instance)
+                    end
+                    UIManager:nextTick(function() outer:scanAllMetadata() end)
+                end,
             },
             {
                 text     = _('"Latest" walk depth'),

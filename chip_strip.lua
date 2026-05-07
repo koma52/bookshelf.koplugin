@@ -40,6 +40,7 @@ local GestureRange   = require("ui/gesturerange")
 local Size           = require("ui/size")
 local Font           = require("ui/font")
 local Blitbuffer     = require("ffi/blitbuffer")
+local UIManager      = require("ui/uimanager")
 local Screen         = require("device").screen
 
 local ChipStrip = InputContainer:extend{
@@ -53,6 +54,7 @@ local ChipStrip = InputContainer:extend{
     height            = nil,
     on_change         = nil,   -- function(key) — chips mode tap
     on_breadcrumb     = nil,   -- function(depth) — breadcrumb mode tap
+    show_parent       = nil,   -- window-level widget, used as setDirty target
 }
 
 -- Small triangular pointer that protrudes ABOVE the chip body, base on
@@ -318,6 +320,13 @@ function ChipStrip:_initChips()
             }
         end
         local is_active = isFilled(chip)
+        -- Pre-paint feedback: when the user has tapped a chip and we're
+        -- waiting for the heavy on_change work (refetch + rebuild), the
+        -- tapped chip renders with a light-grey fill so the tap feels
+        -- responsive on slower chips like Genres / Authors. Cleared
+        -- automatically when the rebuild replaces this strip with a
+        -- fresh instance whose active chip is now black.
+        local is_pending = self._pending_key == chip.key
         local w
         if chip.action then
             w = action_w
@@ -372,13 +381,29 @@ function ChipStrip:_initChips()
                 max_width = w - 2 * Size.padding.small,
             }
         end
+        -- Reserve a thick border slot on every chip so we can swap its
+        -- colour without shifting the cell_content position. The border
+        -- is invisible against the chip's bg in idle/active state
+        -- (paper-on-paper or black-on-black) and switches to black when
+        -- the chip is pending — drawing a hollow ring inside the chip
+        -- silhouette as tap feedback. Size.border.thick (2dp) reads
+        -- more clearly as a "ring" than the chip strip's own outer
+        -- border (Size.border.thin = 0.5dp).
+        local b = Size.border.thick
+        local border_color
+        if is_pending or is_active then
+            border_color = Blitbuffer.COLOR_BLACK
+        else
+            border_color = paper
+        end
         local chip_body = FrameContainer:new{
-            bordersize = 0,
+            bordersize = b,
+            color      = border_color,
             margin     = 0,
             padding    = 0,
             background = is_active and Blitbuffer.COLOR_BLACK or paper,
             CenterContainer:new{
-                dimen = Geom:new{ w = w, h = self.height },
+                dimen = Geom:new{ w = w - 2 * b, h = self.height - 2 * b },
                 cell_content,
             },
         }
@@ -567,6 +592,50 @@ function ChipStrip:_initBreadcrumb()
     self[1] = row
 end
 
+-- ─── Pre-paint feedback ─────────────────────────────────────────────────────
+-- flashPending(key): paint a black border around the named chip RIGHT
+-- NOW, before the caller's heavy work runs. Use this when a tap or swipe
+-- is about to trigger a slow tab switch — gives the user instant visual
+-- confirmation that their input was received.
+--
+-- Must be called before the work that will trigger _rebuild (which
+-- destroys this strip instance). The border clears automatically when
+-- the rebuild swaps in a fresh strip.
+--
+-- Why each step is here:
+--   * _initChips rebuilds the widget tree because chip colours are
+--     baked into the FrameContainer at build time, not read at paint
+--     time — flipping _pending_key alone would repaint the same baked
+--     bg/border.
+--   * setDirty must target show_parent (the window-level widget);
+--     ChipStrip itself is a subwidget so setDirty(self, ...) is a
+--     no-op for the dirty flag.
+--   * "fast" = A2 binary waveform (~100ms vs ~450ms for "ui" / GC16).
+--     Safe because the pending border is pure black on paper — no
+--     greys to crush.
+--   * Refresh region narrowed to the chip's screen rect so only that
+--     chip flashes, not the whole strip. d.x is row-local; the row
+--     sits inside the strip's outer FrameContainer at offset
+--     (Size.border.thin, Size.border.thin), so we shift by that.
+--   * forceRePaint drains the paint queue immediately — without it,
+--     the repaint would only run after the caller's heavy work
+--     returns, by which point the strip has been replaced.
+function ChipStrip:flashPending(key)
+    if not key or not self._chip_dimens then return end
+    local d = self._chip_dimens[key]
+    if not d or not self.show_parent or not self.dimen then return end
+    self._pending_key = key
+    self:_initChips()
+    local b = Size.border.thin
+    UIManager:setDirty(self.show_parent, "fast", Geom:new{
+        x = self.dimen.x + b + d.x,
+        y = self.dimen.y + b,
+        w = d.w,
+        h = self.height,
+    })
+    UIManager:forceRePaint()
+end
+
 -- ─── Unified tap dispatch ───────────────────────────────────────────────────
 
 function ChipStrip:onTapStrip(_, ges)
@@ -586,6 +655,12 @@ function ChipStrip:onTapStrip(_, ges)
             local d = self._chip_dimens[chip.key]
             if d and x >= d.x and x < d.x + d.w then
                 if self.on_change and chip.key ~= self.active then
+                    -- Action chips (current / search) skip the pending
+                    -- paint because they don't trigger a rebuild — the
+                    -- border would have nothing to clear it.
+                    if not chip.action then
+                        self:flashPending(chip.key)
+                    end
                     self.on_change(chip.key)
                 end
                 return true

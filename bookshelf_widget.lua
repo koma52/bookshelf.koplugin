@@ -520,6 +520,10 @@ function BookshelfWidget:_rebuild()
         chip_pill_label   = chip_pill_label,
         chip_pill_glyph   = chip_pill_glyph,
         back_label        = back_label,
+        -- show_parent points the strip at the window-level widget so
+        -- its tap-feedback can flag a repaint. UIManager:setDirty only
+        -- accepts widgets registered with UIManager:show.
+        show_parent       = self,
         on_change = function(key)
             -- Search "chip" is an action, not a navigable tab — open
             -- the search dialog and bail before switching self.chip.
@@ -577,6 +581,10 @@ function BookshelfWidget:_rebuild()
             self:_drillBackTo(depth)
         end,
     }
+    -- Stash the strip so swipe-cycling (_setActiveChip) can ask it to
+    -- pre-paint a "pending" border on the destination chip — same
+    -- responsiveness affordance that taps already get via onTapStrip.
+    self._chip_strip = chips or nil
 
     -- ── Shelf items ───────────────────────────────────────────────────────────
     -- Pagination: 8 per page (4 covers × 2 shelves). Fetch enough items to
@@ -1763,6 +1771,14 @@ end
 -- both produce identical state transitions.
 function BookshelfWidget:_setActiveChip(key)
     if not key or key == self.chip then return end
+    -- Pre-paint feedback on the destination chip: same affordance taps
+    -- get, so a swipe-driven tab change feels just as responsive even
+    -- when the new tab is slow to fetch (Genres / Authors). The strip
+    -- handles the actual paint and clears itself when _rebuild swaps in
+    -- a fresh strip below.
+    if self._chip_strip and self._chip_strip.flashPending then
+        self._chip_strip:flashPending(key)
+    end
     self._drilldown_path = {}
     self.chip            = key
     self.page            = 1

@@ -32,8 +32,9 @@ chip's order.
 - No global sort preference. Each chip is independent.
 - No migration of existing KOReader collate state into per-chip settings —
   every chip starts at the default specified below on first launch.
-- No sort menu on the Recent chip. Recent is inherently an ordering, not a
-  collection that can be reordered.
+- No alternative sort on the Recent chip. The menu still opens (so the gesture
+  is consistent across chips and discoverable on Recent too) but shows a single
+  checked row, "By recently read". Tapping it just dismisses the dialog.
 
 ## Files Changed
 
@@ -54,7 +55,7 @@ No new files.
 | Chip       | Options                                              | Default       |
 |------------|------------------------------------------------------|---------------|
 | all        | By title · By date added · By path · *Reverse* · *Mixed folders* | By title (Reverse off, Mixed off) |
-| recent     | *no menu*                                            | n/a           |
+| recent     | By recently read                                     | (only option) |
 | latest     | By mtime · By title                                  | By mtime      |
 | favourites | By date added · By title · By recently read         | By date added |
 | series     | By name · By latest read · By book count            | By latest read|
@@ -89,11 +90,11 @@ A missing setting reads as the default for that chip.
 `_buildPaginationFooter` already constructs the page-text Button at line 1335
 with `callback = function() end`. Replace that callback with a call to a new
 `BookshelfWidget:_openSortMenu()` method, passing the page-text button as the
-anchor. On the Recent chip, `_openSortMenu` returns immediately (no-op) so the
-button stays inert.
+anchor.
 
 `_openSortMenu` builds a `ButtonDialog` whose `buttons` table is constructed
-per `self.chip`:
+per `self.chip`. Recent's table contains a single checked row that just closes
+the dialog — no setting written, no re-render.
 
 ```lua
 local dialog
@@ -182,3 +183,6 @@ Manual verification on Kindle device:
 5. Cold restart KOReader, confirm the per-chip choices persist.
 6. KOReader filemanager: change collate from "By title" to "By date";
    bookshelf's All chip MUST NOT change order (auto-refresh removed).
+7. Recent chip: tap page-text button, confirm a single-row menu appears with
+   "By recently read" checked; tapping the row dismisses the dialog and the
+   shelf does NOT re-render (no setting was changed).

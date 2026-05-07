@@ -1250,6 +1250,32 @@ function Repo.searchAll(query)
     return { folders = folders, authors = authors, series = series, genres = genres, books = books }
 end
 
+-- ─── findGroup ───────────────────────────────────────────────────────────────
+-- Searches the in-memory shape cache for a group whose series_name matches
+-- `name` (case-insensitive exact match) and hydrates just that one group.
+-- Returns nil when: kind is unrecognised, the relevant cache is cold (has
+-- never been populated this session), or no group matches the name.
+-- Callers that get nil should fall back to a minimal single-book group.
+function Repo.findGroup(kind, name)
+    if not name or name == "" then return nil end
+    local home  = G_reader_settings:readSetting("home_dir") or "/"
+    local depth = G_reader_settings:readSetting("bookshelf_latest_walk_depth") or 3
+    local key   = (home or "/") .. ":" .. tostring(depth or 0)
+    local cache
+    if     kind == "author" then cache = _authors_cache[key]
+    elseif kind == "series" then cache = _series_cache[key]
+    elseif kind == "genre"  then cache = _genres_cache[key]
+    else return nil end
+    if not cache then return nil end
+    local lname = name:lower()
+    for _, shape in ipairs(cache.groups) do
+        if (shape.series_name or ""):lower() == lname then
+            return _hydrateGroupShape(shape)
+        end
+    end
+    return nil
+end
+
 -- ─── enrichStats ─────────────────────────────────────────────────────────────
 -- Mutates `book` in-place with statistics fields from readerstatistics.
 -- Graceful no-op when the statistics plugin is absent or its API method is nil.

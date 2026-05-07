@@ -493,5 +493,53 @@ test("searchAll: matches folders by directory name", function()
 end)
 
 -- ============================================================================
+-- findGroup
+-- ============================================================================
+
+test("findGroup: returns nil for unknown kind", function()
+    local g = Repo.findGroup("unknown", "anything")
+    assert(g == nil)
+end)
+
+test("findGroup: returns nil when name not in author cache", function()
+    Repo.invalidateWalkCache()
+    package.loaded["libs/libkoreader-lfs"].dir = function(path)
+        local files = (path == "/lib") and {".", "..", "dune.epub"} or {".", ".."}
+        local i = 0; return function() i=i+1; return files[i] end
+    end
+    package.loaded["libs/libkoreader-lfs"].attributes = function(fp, key)
+        if key == "mode" then return "file" end; return 0
+    end
+    _G._test_settings = { home_dir = "/lib", bookshelf_latest_walk_depth = 1 }
+    _G._test_bim_data = { ["/lib/dune.epub"] = { title = "Dune", authors = "Frank Herbert" } }
+    Repo.invalidateSeriesCache()
+    Repo.getAuthors(10, 0) -- warm cache
+    local g = Repo.findGroup("author", "Tolkien")
+    assert(g == nil, "expected nil for non-existent author")
+end)
+
+test("findGroup: returns hydrated group for known author", function()
+    Repo.invalidateWalkCache()
+    package.loaded["libs/libkoreader-lfs"].dir = function(path)
+        local files = (path == "/lib") and {".", "..", "dune.epub", "dune2.epub"} or {".", ".."}
+        local i = 0; return function() i=i+1; return files[i] end
+    end
+    package.loaded["libs/libkoreader-lfs"].attributes = function(fp, key)
+        if key == "mode" then return "file" end; return 0
+    end
+    _G._test_settings = { home_dir = "/lib", bookshelf_latest_walk_depth = 1 }
+    _G._test_bim_data = {
+        ["/lib/dune.epub"]  = { title = "Dune",           authors = "Frank Herbert" },
+        ["/lib/dune2.epub"] = { title = "Dune Messiah",   authors = "Frank Herbert" },
+    }
+    Repo.invalidateSeriesCache()
+    Repo.getAuthors(10, 0) -- warm cache
+    local g = Repo.findGroup("author", "Frank Herbert")
+    assert(g ~= nil, "expected a group record")
+    assert(g.series_name == "Frank Herbert")
+    assert(#g.books == 2, "expected 2 books, got " .. #g.books)
+end)
+
+-- ============================================================================
 io.write(string.format("\n%d passed, %d failed\n", pass, fail))
 os.exit(fail == 0 and 0 or 1)

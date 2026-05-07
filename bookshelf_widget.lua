@@ -1015,8 +1015,7 @@ function BookshelfWidget:_fetchChipItems(n)
     local tip = self._drilldown_path[#self._drilldown_path]
     -- Search mode: emit ordered tiles (folders -> authors -> series -> genres -> books).
     if tip and tip.kind == "search" then
-        local ds = G_reader_settings:readSetting("bookshelf_chips_disabled")
-                   or { latest = true, authors = true, genres = true, tags = true }
+        local ds = G_reader_settings:readSetting("bookshelf_chips_disabled") or {}
         local fresh = {}
         if not ds["all"] then
             for _, f in ipairs(tip.payload.folders or {}) do

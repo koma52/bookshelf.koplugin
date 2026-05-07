@@ -982,8 +982,18 @@ function BookshelfWidget:_pollExtraction()
         -- helper as the queue gate so the poll considers it done as soon as
         -- the new bb lands within the band we'd have stopped queueing at.
         local cover_ready = true
-        if meta_ready and info.has_cover == "Y" then
-            cover_ready = not BookshelfWidget._coverNeedsResize(info, f.cover_specs)
+        if f.cover_specs then
+            -- File was queued specifically for cover extraction. Don't
+            -- consider it done until BIM has actually attempted the cover
+            -- (cover_fetched = "Y"). Without this, metadata-scanned books
+            -- (has_meta="Y", cover_fetched=nil) are immediately flagged done,
+            -- which triggers _swapShelvesInPlace → _kickOff → kills the
+            -- running BIM subprocess before it finishes the queue.
+            if not info or info.cover_fetched ~= "Y" then
+                cover_ready = false
+            elseif info.has_cover == "Y" then
+                cover_ready = not BookshelfWidget._coverNeedsResize(info, f.cover_specs)
+            end
         end
         if meta_ready and inprog == 0 and cover_ready then
             any_new = true

@@ -38,7 +38,8 @@ end
 -- ─── BookshelfWidget ──────────────────────────────────────────────────────────
 
 local BookshelfWidget = InputContainer:extend{
-    name = "bookshelf",
+    name              = "bookshelf",
+    covers_fullscreen = true, -- prevents FileManager's 1s dirty cycle from cascading up
     -- Internal state.
     chip             = "recent",
     -- Drill-down path: empty array = top level (chips list shown); non-empty
@@ -1581,137 +1582,286 @@ function BookshelfWidget:_buildPaginationFooter(content_w, label_h, total_pages)
     }
 end
 
--- _openSortMenu — chip-relevant sort menu, opened from the pagination
--- footer's page-text button. Centred ButtonDialog with a "Sort by" title.
--- Picks write the per-chip setting and re-render via _swapShelvesInPlace.
--- Recent chip shows a single inert checked row so the gesture stays
--- consistent across chips.
+-- _openSortMenu — chip-relevant sort dialog with native CheckButton rows.
+-- Each sort option renders RadioMark ◯/◉ (radio=true); All-chip toggles
+-- render CheckMark ▢/✓ (radio=false). Changes accumulate locally until
+-- Apply is tapped; Cancel discards them. The dialog anchors above the
+-- pagination footer so it feels connected to the button that opened it.
 --
--- Layout decisions (refined after the initial anchored version read poorly):
---   1. `title = "Sort by"` adds a proper header — replaces a stock-looking
---      KOReader dialog with one that announces its purpose.
---   2. Unchecked radio rows are padded with two spaces so their left edge
---      aligns with the checked row's `✓ ` glyph (no zigzag down the list).
---   3. The All chip's two toggles (Reverse / Mixed folders) share a single
---      two-up row, visually distinguishing them as independent on/off
---      switches versus the one-of-many radio rows above.
---   4. No anchor — the dialog centres on screen via the default
---      CenterContainer wrap. The earlier left-anchored attempt read as
---      lopsided rather than "rising from the pagination".
+-- Radio group management: CheckButton with radio=true skips toggleCheck()
+-- by design (it expects a RadioButtonTable parent to manage the group).
+-- We replicate that logic manually via radio_btn_refs: on each radio tap,
+-- deselect the previously selected button via initCheckButton(false) then
+-- select the new one. Toggle buttons auto-call toggleCheck() before the
+-- callback, so btn.checked is already the new state when we read it.
 function BookshelfWidget:_openSortMenu()
-    local ButtonDialog = require("ui/widget/buttondialog")
-    local CHECK    = "\xe2\x9c\x93 "  -- "✓ " — matches _openBookMenu's pattern.
-    local NO_CHECK = "   "             -- 3 spaces ≈ ✓+space in the button face,
-                                       -- so unchecked rows align with checked.
+    local ButtonTable      = require("ui/widget/buttontable")
+    local CheckButton      = require("ui/widget/checkbutton")
+    local Device           = require("device")
+    local LineWidget       = require("ui/widget/linewidget")
+    local MovableContainer = require("ui/widget/container/movablecontainer")
+    local TitleBar         = require("ui/widget/titlebar")
+    local VerticalSpan     = require("ui/widget/verticalspan")
+    local WidgetContainer  = require("ui/widget/container/widgetcontainer")
 
     local chip   = self.chip
     local active = Repo.getSortKey(chip)
     local bw     = self
+
+    local sw       = Screen:getWidth()
+    local sh       = Screen:getHeight()
+    local dialog_w = math.max(
+        math.floor(math.min(sw, sh) * 0.7),
+        math.floor(sw * 0.4)
+    )
+    local btn_w = math.floor(dialog_w * 0.9)
+    local face  = Font:getFace("cfont", 22)
+
+    -- Pending state — only written to settings on Apply.
+    local selected_sort  = active
+    local toggle_states  = {}  -- { [setting_key] = bool }
+    local radio_btn_refs = {}  -- for radio group deselect
+    local toggle_btn_refs = {} -- for flash_ui bypass below
     local dialog
 
-    local function radio_btn(label, sort_value)
-        local prefix = (active == sort_value) and CHECK or NO_CHECK
-        return { text = prefix .. label,
-                 callback = function()
-                     G_reader_settings:saveSetting("bookshelf_sort_" .. chip, sort_value)
-                     G_reader_settings:flush()
-                     UIManager:close(dialog)
-                     bw:_swapShelvesInPlace()
-                 end }
+    local function set_radio(btn, checked)
+        btn.checked = checked
+        btn._checkmark.checked = checked
+        btn._checkmark:init()
+        UIManager:setDirty(dialog, function() return "fast", btn.dimen end)
     end
 
-    local function toggle_btn(label, setting_key)
-        local on     = G_reader_settings:readSetting(setting_key) == true
-        local prefix = on and CHECK or NO_CHECK
-        return { text = prefix .. label,
-                 callback = function()
-                     G_reader_settings:saveSetting(setting_key, not on)
-                     G_reader_settings:flush()
-                     UIManager:close(dialog)
-                     bw:_swapShelvesInPlace()
-                 end }
+    local function radio_row(label, sort_value)
+        local btn
+        btn = CheckButton:new{
+            text = label, face = face,
+            checked = (selected_sort == sort_value), radio = true,
+            width = btn_w,
+            callback = function()
+                if selected_sort == sort_value then return end
+                for _, b in ipairs(radio_btn_refs) do
+                    if b.checked then set_radio(b, false) end
+                end
+                set_radio(btn, true)
+                selected_sort = sort_value
+            end,
+        }
+        btn.onTapCheckButton = function(self_b)
+            if not self_b.enabled then return true end
+            if self_b.callback then self_b.callback() end
+            UIManager:forceRePaint()
+            return true
+        end
+        table.insert(radio_btn_refs, btn)
+        return btn
     end
 
-    local buttons
+    local function toggle_row(label, setting_key)
+        local on = G_reader_settings:readSetting(setting_key) == true
+        toggle_states[setting_key] = on
+        local btn
+        btn = CheckButton:new{
+            text = label, face = face,
+            checked = on, radio = false, width = btn_w,
+            -- toggleCheck() flips btn.checked before this fires
+            callback = function() toggle_states[setting_key] = btn.checked end,
+        }
+        table.insert(toggle_btn_refs, btn)
+        return btn
+    end
+
+    local radio_rows, toggle_rows = {}, {}
     if chip == "recent" then
-        buttons = {
-            { { text = CHECK .. _("By recently read"),
-                callback = function() UIManager:close(dialog) end } },
-        }
+        table.insert(radio_rows, CheckButton:new{
+            text = _("Recently read"), face = face,
+            checked = true, radio = true, enabled = false, width = btn_w,
+        })
     elseif chip == "all" then
-        buttons = {
-            { radio_btn(_("By title"),      "title") },
-            { radio_btn(_("By date added"), "date_added") },
-            { radio_btn(_("By path"),       "path") },
-            -- Two-up: toggles share a row, distinct from full-width radios.
-            {
-                toggle_btn(_("Reverse"),       "bookshelf_sort_all_reverse"),
-                toggle_btn(_("Mixed folders"), "bookshelf_sort_all_mixed"),
-            },
-        }
+        table.insert(radio_rows, radio_row(_("Name"),                             "title"))
+        table.insert(radio_rows, radio_row(_("Name (natural sorting)"),           "natural"))
+        table.insert(radio_rows, radio_row(_("Date modified"),                    "date_added"))
+        table.insert(radio_rows, radio_row(_("Last read"),                        "last_read"))
+        table.insert(radio_rows, radio_row(_("Size"),                             "size"))
+        table.insert(radio_rows, radio_row(_("Format"),                           "format"))
+        table.insert(radio_rows, radio_row(_("Percent \u{2013} unopened first"),  "percent_unopened_first"))
+        table.insert(radio_rows, radio_row(_("Percent \u{2013} unopened last"),   "percent_unopened_last"))
+        table.insert(radio_rows, radio_row(_("Percent \u{2013} unopened \u{2013} finished last"), "percent_natural"))
+        table.insert(toggle_rows, toggle_row(_("Reverse"),       "bookshelf_sort_all_reverse"))
+        table.insert(toggle_rows, toggle_row(_("Mixed folders"), "bookshelf_sort_all_mixed"))
     elseif chip == "latest" then
-        buttons = {
-            { radio_btn(_("By date added"), "mtime") },
-            { radio_btn(_("By title"),      "title") },
-        }
+        table.insert(radio_rows, CheckButton:new{
+            text = _("Date added"), face = face,
+            checked = true, radio = true, enabled = false, width = btn_w,
+        })
     elseif chip == "favorites" then
-        buttons = {
-            { radio_btn(_("By date added"),    "date_added") },
-            { radio_btn(_("By title"),         "title") },
-            { radio_btn(_("By recently read"), "recently_read") },
-        }
+        table.insert(radio_rows, radio_row(_("Date added"),    "date_added"))
+        table.insert(radio_rows, radio_row(_("Title"),         "title"))
+        table.insert(radio_rows, radio_row(_("Recently read"), "recently_read"))
     elseif chip == "series" or chip == "authors"
             or chip == "genres" or chip == "tags" then
-        buttons = {
-            { radio_btn(_("By name"),          "name") },
-            { radio_btn(_("By latest read"),   "latest_read") },
-            { radio_btn(_("By book count"),    "book_count") },
-        }
+        table.insert(radio_rows, radio_row(_("Name"),        "name"))
+        table.insert(radio_rows, radio_row(_("Latest read"), "latest_read"))
+        table.insert(radio_rows, radio_row(_("Book count"),  "book_count"))
     else
         logger.dbg("[bookshelf] _openSortMenu: unknown chip " .. tostring(chip))
         return
     end
 
-    -- Without an anchor, ButtonDialog vertical-centres on screen — too far
-    -- from the pagination the user tapped. With a centred-x anchor at the
-    -- button's y, MovableContainer pops above the button so the dialog reads
-    -- as rising from the pagination.
-    --
-    -- shrink_unneeded_width fits the dialog to the widest button + title
-    -- rather than padding to the full width cap. The anchor closure reads
-    -- the MovableContainer's actual measured width (set during the sizing
-    -- pass before ensureAnchor runs — see movablecontainer.lua:184) so the
-    -- left-edge offset stays correctly centred even after the shrink.
-    local sw       = Screen:getWidth()
-    local sh       = Screen:getHeight()
-    local dialog_w = math.floor(math.min(sw, sh) * 0.7)  -- max width cap
+    local rows_vg = VerticalGroup:new{ align = "left" }
+    for _, row in ipairs(radio_rows) do
+        table.insert(rows_vg, row)
+    end
+    if #toggle_rows > 0 then
+        table.insert(rows_vg, VerticalSpan:new{ width = Size.padding.default })
+        table.insert(rows_vg, LineWidget:new{
+            background = Blitbuffer.COLOR_LIGHT_GRAY,
+            dimen = Geom:new{ w = btn_w, h = Size.line.medium },
+        })
+        table.insert(rows_vg, VerticalSpan:new{ width = Size.padding.default })
+        for _, row in ipairs(toggle_rows) do
+            table.insert(rows_vg, row)
+        end
+    end
 
-    dialog = ButtonDialog:new{
-        title                 = _("Sort by"),
-        title_align           = "center",
-        width                 = dialog_w,
-        shrink_unneeded_width = true,
-        -- Floor on the shrunk width so buttons aren't flush with the dialog
-        -- frame. Default is scaleBySize(100), which leaves zero breathing
-        -- room around our short button labels. ~40% of screen width gives
-        -- comfortable horizontal padding inside the dialog.
-        shrink_min_width      = math.floor(Screen:getWidth() * 0.4),
-        buttons               = buttons,
-        anchor                = function()
-            local btn = bw._page_text_button and bw._page_text_button.dimen
-            if not btn then return nil end
-            local actual_w = (dialog.movable and dialog.movable.dimen
-                              and dialog.movable.dimen.w) or dialog_w
-            local gap = Screen:scaleBySize(16)
-            return {
-                x = math.floor((sw - actual_w) / 2),
-                y = btn.y - gap,
-                w = actual_w,
-                h = btn.h,
-            }
-        end,
+    -- Same lightweight swap for toggle (checkbox) buttons.
+    -- toggleCheck() calls initCheckButton internally — same cost as the radio
+    -- path. Directly flip _checkmark instead.
+    for _, b in ipairs(toggle_btn_refs) do
+        b.onTapCheckButton = function(self_b)
+            if not self_b.enabled then return true end
+            self_b.checked = not self_b.checked
+            self_b._checkmark.checked = self_b.checked
+            self_b._checkmark:init()
+            UIManager:setDirty(dialog, function() return "fast", self_b.dimen end)
+            if self_b.callback then self_b.callback() end
+            return true
+        end
+    end
+    -- Apply writes pending state to settings; Cancel discards.
+    -- "recent" chip has nothing to apply so both buttons just close.
+    local function do_apply()
+        if chip ~= "recent" then
+            G_reader_settings:saveSetting("bookshelf_sort_" .. chip, selected_sort)
+        end
+        for key, val in pairs(toggle_states) do
+            G_reader_settings:saveSetting(key, val)
+        end
+        G_reader_settings:flush()
+        UIManager:close(dialog)
+        bw:_swapShelvesInPlace()
+    end
+    local function do_cancel()
+        UIManager:close(dialog)
+    end
+
+    local bottom_buttons
+    if chip == "recent" then
+        bottom_buttons = { { { text = _("Close"), callback = do_cancel } } }
+    else
+        bottom_buttons = { {
+            { text = _("Cancel"), callback = do_cancel },
+            { text = _("Apply"),  callback = do_apply  },
+        } }
+    end
+    local button_bar = ButtonTable:new{
+        width    = dialog_w - 2 * Size.padding.default,
+        buttons  = bottom_buttons,
+        zero_sep = true,
     }
-    UIManager:show(dialog)
+
+    local frame = FrameContainer:new{
+        radius = Size.radius.window,
+        padding = 0, margin = 0,
+        background = Blitbuffer.COLOR_WHITE,
+        VerticalGroup:new{
+            align = "left",
+            TitleBar:new{
+                width = dialog_w, align = "center",
+                with_bottom_line = true,
+                title = _("Sort by"),
+                title_shrink_font_to_fit = true,
+            },
+            CenterContainer:new{
+                dimen = Geom:new{
+                    w = dialog_w,
+                    h = rows_vg:getSize().h + 4 * Size.padding.large,
+                },
+                rows_vg,
+            },
+            CenterContainer:new{
+                dimen = Geom:new{
+                    w = dialog_w,
+                    h = button_bar:getSize().h,
+                },
+                button_bar,
+            },
+        },
+    }
+
+    dialog = InputContainer:new{}
+    if Device:isTouchDevice() then
+        dialog.ges_events.TapClose = {
+            GestureRange:new{
+                ges = "tap",
+                range = Geom:new{ x = 0, y = 0, w = sw, h = sh },
+            },
+        }
+    end
+    if Device:hasKeys() then
+        dialog.key_events.Close = { { Device.input.group.Back } }
+    end
+    dialog.onTapClose = function(self_d, arg, ges_ev)
+        if not frame.dimen or ges_ev.pos:notIntersectWith(frame.dimen) then
+            UIManager:close(self_d)
+        end
+        return true
+    end
+    dialog.onClose = function(self_d)
+        UIManager:close(self_d)
+        return true
+    end
+    -- Suspend extraction polling while the dialog is open. The BIM poll fires
+    -- every 3s and calls _swapShelvesInPlace (a full re-sort + render) whenever
+    -- a new cover finishes. That blocks visual feedback between radio taps.
+    local _saved_poll_files    = bw._bim_poll_files
+    local _saved_poll_attempts = bw._bim_poll_attempts
+    if bw._bim_poll_fn then
+        UIManager:unschedule(bw._bim_poll_fn)
+        bw._bim_poll_fn = nil
+    end
+    bw._bim_poll_files = nil
+
+    dialog.onCloseWidget = function(self_d)
+        if _saved_poll_files then
+            bw._bim_poll_files    = _saved_poll_files
+            bw._bim_poll_attempts = _saved_poll_attempts or 0
+            bw:_scheduleExtractionPoll()
+        end
+        UIManager:setDirty(nil, function()
+            return "ui", frame.dimen
+        end)
+    end
+    dialog[1] = WidgetContainer:new{
+        align = "center",
+        dimen = Geom:new{ x = 0, y = 0, w = sw, h = sh },
+        MovableContainer:new{
+            frame,
+            -- Anchor above the pagination footer so the dialog appears to
+            -- rise from the button that opened it.
+            anchor = function()
+                local btn = bw._page_text_button and bw._page_text_button.dimen
+                if not btn then return nil end
+                return {
+                    x = math.floor((sw - dialog_w) / 2),
+                    y = btn.y - Size.padding.large,
+                    w = dialog_w,
+                    h = btn.h,
+                }
+            end,
+        },
+    }
+
+    UIManager:show(dialog, function() return "partial", frame.dimen end)
 end
 
 -- _swapShelvesInPlace — pagination fast-path. Rebuilds only the shelf rows

@@ -173,8 +173,13 @@ local _SORT_DEFAULT = {
 }
 
 local _SORT_VALID = {
-    all        = { title = true, date_added = true, path = true },
-    latest     = { mtime = true, title = true },
+    all        = {
+        title = true, natural = true, date_added = true,
+        size  = true, format  = true, last_read  = true,
+        percent_unopened_first = true, percent_unopened_last = true,
+        percent_natural        = true,
+    },
+    latest     = { mtime = true },
     favorites  = { date_added = true, title = true, recently_read = true },
     series     = { name = true, latest_read = true, book_count = true },
     authors    = { name = true, latest_read = true, book_count = true },
@@ -585,18 +590,72 @@ function Repo.findFirstBookIn(path, max_depth)
 end
 
 -- Comparator for the All chip's entries. Operates on raw lfs entries
--- (name/fp/attr/optional doc_props) before any cache shaping. Three keys
--- match the per-chip sort menu: title (default), date_added, path.
+-- (name/fp/attr/optional doc_props/_pct/_last_read) before cache shaping.
+-- Keys requiring extra data have that data pre-fetched by getAll before
+-- this comparator is created.
 local function _makeAllSort(key)
     if key == "date_added" then
         return function(a, b)
             return (a.attr.modification or 0) > (b.attr.modification or 0)
         end
-    elseif key == "path" then
-        return function(a, b) return a.fp < b.fp end
+    elseif key == "size" then
+        return function(a, b)
+            return (a.attr.size or 0) > (b.attr.size or 0)
+        end
+    elseif key == "format" then
+        return function(a, b)
+            local fa = (a.name:match("%.([^.]+)$") or ""):lower()
+            local fb = (b.name:match("%.([^.]+)$") or ""):lower()
+            if fa ~= fb then return fa < fb end
+            return a.name:lower() < b.name:lower()
+        end
+    elseif key == "natural" then
+        local natsort = require("sort").natsort_cmp()
+        return function(a, b)
+            local ta = (a.doc_props and a.doc_props.display_title) or a.name
+            local tb = (b.doc_props and b.doc_props.display_title) or b.name
+            return natsort(ta, tb)
+        end
+    elseif key == "last_read" then
+        return function(a, b)
+            return (a._last_read or 0) > (b._last_read or 0)
+        end
+    elseif key == "percent_unopened_first" then
+        -- nil (never opened) first; opened entries sort by percent ascending.
+        return function(a, b)
+            local pa, pb = a._pct, b._pct
+            if (pa == nil) ~= (pb == nil) then return pa == nil end
+            if pa == nil then return a.name:lower() < b.name:lower() end
+            return pa < pb
+        end
+    elseif key == "percent_unopened_last" then
+        -- opened entries ascending, nil (never opened) last.
+        return function(a, b)
+            local pa, pb = a._pct, b._pct
+            if (pa == nil) ~= (pb == nil) then return pb == nil end
+            if pa == nil then return a.name:lower() < b.name:lower() end
+            return pa < pb
+        end
+    elseif key == "percent_natural" then
+        -- In-progress (0 ≤ p < 1) descending first, then never-opened (nil),
+        -- then finished (p ≥ 1) last — mirrors KOReader's BookList.percent_natural.
+        local natsort = require("sort").natsort_cmp()
+        return function(a, b)
+            local pa, pb = a._pct, b._pct
+            local function tier(p)
+                if p == nil  then return 2 end  -- never opened
+                if p >= 1    then return 3 end  -- finished
+                return 1                        -- in progress
+            end
+            local ta, tb = tier(pa), tier(pb)
+            if ta ~= tb then return ta < tb end
+            if ta == 1 then return pa > pb end  -- most-read first within in-progress
+            local na = (a.doc_props and a.doc_props.display_title) or a.name
+            local nb = (b.doc_props and b.doc_props.display_title) or b.name
+            return natsort(na, nb)
+        end
     end
-    -- title (default): alphabetical by display title (BIM-enriched in caller),
-    -- falling back to filename.
+    -- title (default): alphabetical by display title (BIM-enriched in caller).
     return function(a, b)
         local ta = (a.doc_props and a.doc_props.display_title) or a.name
         local tb = (b.doc_props and b.doc_props.display_title) or b.name
@@ -673,9 +732,16 @@ function Repo.getAll(path, limit, offset)
         end
     end
 
-    -- For the title sort, pre-fetch BIM display titles before sorting so
-    -- the comparator stays O(1) per pair.
-    if sort_key == "title" then
+    -- Pre-fetch data required by the comparator before sorting so each
+    -- comparison stays O(1). BIM titles for title/natural/percent_natural;
+    -- ReadHistory timestamps for last_read; DocSettings percent for the
+    -- three percent-based keys.
+    local needs_titles  = sort_key == "title" or sort_key == "natural"
+                          or sort_key == "percent_natural"
+    local needs_percent = sort_key == "percent_unopened_first"
+                          or sort_key == "percent_unopened_last"
+                          or sort_key == "percent_natural"
+    if needs_titles then
         local bim = getBookInfoMgr()
         for _, e in ipairs(entries) do
             if e.attr.mode == "file" then
@@ -683,6 +749,26 @@ function Repo.getAll(path, limit, offset)
                 e.doc_props = { display_title = info.title or e.name }
             else
                 e.doc_props = { display_title = e.name }
+            end
+        end
+    end
+    if sort_key == "last_read" then
+        local ReadHistory = require("readhistory")
+        local rh = {}
+        for _, item in ipairs(ReadHistory.hist) do
+            rh[item.file] = item.time
+        end
+        for _, e in ipairs(entries) do
+            e._last_read = rh[e.fp] or 0
+        end
+    end
+    if needs_percent then
+        local DocSettings = require("docsettings")
+        for _, e in ipairs(entries) do
+            if e.attr.mode == "file" then
+                local ds = DocSettings:open(e.fp)
+                e._pct = ds:readSetting("percent_finished")
+                -- no ds:close() — DocSettings doesn't expose one; GC handles it
             end
         end
     end
@@ -711,26 +797,20 @@ function Repo.getAll(path, limit, offset)
         for _, e in ipairs(files)   do ordered_entries[#ordered_entries + 1] = e end
     end
 
-    local all_out = {}
-    local shapes  = {}
+    -- Build shapes only — no BIM lookups here. Skipping buildBookMeta for
+    -- every book in the library is the key perf win: a 200-book library was
+    -- doing 200 SQLite round-trips just to build the sort cache. Now only the
+    -- current page slice (PAGE_SIZE items) triggers BIM lookups, via the
+    -- hydration pass below (same code path as the HIT branch).
+    local shapes = {}
     for _, e in ipairs(ordered_entries) do
         if e.attr.mode == "file" then
             local ext = e.name:match("%.([^.]+)$")
             if ext and SUPPORTED_EXT[ext:lower()] then
-                local b = Repo.buildBookMeta(e.fp)
-                if b then
-                    all_out[#all_out + 1] = b
-                    shapes[#shapes + 1] = { kind = "book", fp = e.fp }
-                end
+                shapes[#shapes + 1] = { kind = "book", fp = e.fp }
             end
         elseif e.attr.mode == "directory" then
             local fb = Repo.findFirstBookIn(e.fp, 3)
-            all_out[#all_out + 1] = {
-                kind       = "folder",
-                path       = e.fp,
-                label      = e.name,
-                first_book = fb,
-            }
             shapes[#shapes + 1] = {
                 kind          = "folder",
                 path          = e.fp,
@@ -739,11 +819,26 @@ function Repo.getAll(path, limit, offset)
             }
         end
     end
-    local total = #all_out
+    local total = #shapes
     _all_cache[cache_key] = { shapes = shapes, expires_at = now + WALK_CACHE_TTL }
+    -- Hydrate the requested page slice exactly as the HIT path does.
     local out  = {}
     local stop = limit and math.min(offset + limit, total) or total
-    for i = offset + 1, stop do out[#out + 1] = all_out[i] end
+    for i = offset + 1, stop do
+        local shape = shapes[i]
+        if shape.kind == "folder" then
+            local fb = shape.first_book_fp and Repo.buildBookMeta(shape.first_book_fp)
+            out[#out + 1] = {
+                kind       = "folder",
+                path       = shape.path,
+                label      = shape.label,
+                first_book = fb,
+            }
+        else
+            local b = Repo.buildBookMeta(shape.fp)
+            if b then out[#out + 1] = b end
+        end
+    end
     logger.dbg(string.format("[bookshelf perf] getAll: MISS build=%.0fms items=%d/%d sort=%s rev=%s mixed=%s",
         (_gettime() - _t0) * 1000, #out, total, sort_key,
         tostring(reverse), tostring(mixed)))

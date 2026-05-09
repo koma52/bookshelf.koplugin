@@ -2555,9 +2555,9 @@ function BookshelfWidget:_openGearMenu()
             },
             {
                 { text = "Settings\xe2\x80\xa6",
-                  callback = closing(function() require("settings"):show(bw) end) },
+                  callback = closing(function() require("bookshelf_settings"):show(bw) end) },
                 { text = "About",
-                  callback = closing(function() require("settings"):_about() end) },
+                  callback = closing(function() require("bookshelf_settings"):_about() end) },
             },
             {
                 { text = "Cancel", callback = closing() },

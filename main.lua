@@ -229,7 +229,7 @@ function Bookshelf:addToMainMenu(menu_items)
     if self.ui.document then return end
 
     local outer = self
-    local S = require("settings")
+    local S = require("bookshelf_settings")
     -- Stash plugin ref now so _updateSubItems callbacks resolve correctly.
     S._plugin = outer
 

@@ -37,6 +37,20 @@ local function splitAuthors(s)
     return #t > 0 and t or nil
 end
 
+-- Split a genre/tag string (or array of strings) on common EPUB delimiters
+-- (comma, semicolon, pipe, slash) and return a trimmed array, or nil.
+local function splitGenreTags(src)
+    local t = {}
+    local inputs = type(src) == "table" and src or { src }
+    for _, s in ipairs(inputs) do
+        for part in s:gmatch("[^,;|/]+") do
+            local trimmed = part:match("^%s*(.-)%s*$")
+            if trimmed and trimmed ~= "" then t[#t + 1] = trimmed end
+        end
+    end
+    return #t > 0 and t or nil
+end
+
 -- Supported e-book extensions (used in both getCurrent and walkBooks).
 local SUPPORTED_EXT = {
     epub=true, pdf=true, mobi=true, azw3=true, fb2=true,
@@ -305,17 +319,9 @@ function Repo.buildBookMeta(filepath)
     -- Genres: Calibre `tags` (array) → BIM `keywords` (string) → none.
     local genres
     if cb and type(cb.tags) == "table" and #cb.tags > 0 then
-        genres = {}
-        for _i, t in ipairs(cb.tags) do genres[#genres + 1] = t end
+        genres = splitGenreTags(cb.tags)
     elseif info.keywords and info.keywords ~= "" then
-        genres = {}
-        for part in info.keywords:gmatch("[^,;|]+") do
-            local trimmed = part:match("^%s*(.-)%s*$")
-            if trimmed and trimmed ~= "" then
-                genres[#genres + 1] = trimmed
-            end
-        end
-        if #genres == 0 then genres = nil end
+        genres = splitGenreTags(info.keywords)
     end
 
     return {

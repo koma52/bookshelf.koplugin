@@ -2356,20 +2356,26 @@ function BookshelfWidget:_nShelves()
     return self._expanded and base + 1 or base
 end
 
--- _pageSize() — page-advance step: non-expanded row count × 4. Constant
--- across the expand/collapse toggle so the first-visible book stays put —
--- the top rows are identical, toggling reveals one extra row at the bottom.
--- Standard screens: 8 (2×4). Tall screens: 12 (3×4).
-function BookshelfWidget:_pageSize()
-    return (self:_isTallScreen() and 3 or 2) * 4
+-- _nCols() — column count per shelf row. Tall screens use 3 for larger
+-- covers; standard screens use 4.
+function BookshelfWidget:_nCols()
+    return self:_isTallScreen() and 3 or 4
 end
 
--- _viewSize() — books shown per page: current row count × 4.
--- Standard normal: 8, standard expanded / tall normal: 12, tall expanded: 16.
--- Expanded pages overlap _pageSize by 4 books (one row) so paging forward
--- reveals one new row at the bottom while the top rows stay fixed.
+-- _pageSize() — page-advance step: non-expanded rows × cols. Constant
+-- across the expand/collapse toggle so the first-visible book stays put —
+-- the top rows are identical, toggling reveals one extra row at the bottom.
+-- Standard: 8 (2×4). Tall: 9 (3×3).
+function BookshelfWidget:_pageSize()
+    return (self:_isTallScreen() and 3 or 2) * self:_nCols()
+end
+
+-- _viewSize() — books shown per page: current rows × cols.
+-- Standard normal: 8, standard expanded: 12, tall normal: 9, tall expanded: 12.
+-- Expanded pages overlap _pageSize by one row so paging forward reveals
+-- one new row at the bottom while the top rows stay fixed.
 function BookshelfWidget:_viewSize()
-    return self:_nShelves() * 4
+    return self:_nShelves() * self:_nCols()
 end
 
 -- _previewNeighbourBook(direction) — cycle self._preview_book through the

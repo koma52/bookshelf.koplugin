@@ -120,15 +120,24 @@ test("_nShelves: tall expanded = 4", function()
     eq(bw(1080, 2400, true):_nShelves(), 4)
 end)
 
+-- ── _nCols tests ───────────────────────────────────────────────────────────
+test("_nCols: standard screen = 4", function()
+    eq(bw(750, 1024):_nCols(), 4)
+end)
+
+test("_nCols: tall screen = 3", function()
+    eq(bw(1080, 2400):_nCols(), 3)
+end)
+
 -- ── _pageSize tests ────────────────────────────────────────────────────────
 test("_pageSize: standard screen = 8 (regardless of expanded)", function()
     eq(bw(750, 1024, false):_pageSize(), 8)
     eq(bw(750, 1024, true):_pageSize(),  8)
 end)
 
-test("_pageSize: tall screen = 12 (regardless of expanded)", function()
-    eq(bw(1080, 2400, false):_pageSize(), 12)
-    eq(bw(1080, 2400, true):_pageSize(),  12)
+test("_pageSize: tall screen = 9 (regardless of expanded)", function()
+    eq(bw(1080, 2400, false):_pageSize(), 9)
+    eq(bw(1080, 2400, true):_pageSize(),  9)
 end)
 
 -- ── _viewSize tests ────────────────────────────────────────────────────────
@@ -140,12 +149,12 @@ test("_viewSize: standard expanded = 12", function()
     eq(bw(750, 1024, true):_viewSize(), 12)
 end)
 
-test("_viewSize: tall normal = 12", function()
-    eq(bw(1080, 2400, false):_viewSize(), 12)
+test("_viewSize: tall normal = 9", function()
+    eq(bw(1080, 2400, false):_viewSize(), 9)
 end)
 
-test("_viewSize: tall expanded = 16", function()
-    eq(bw(1080, 2400, true):_viewSize(), 16)
+test("_viewSize: tall expanded = 12", function()
+    eq(bw(1080, 2400, true):_viewSize(), 12)
 end)
 
 -- ── Report ─────────────────────────────────────────────────────────────────

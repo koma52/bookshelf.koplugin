@@ -55,7 +55,7 @@ end
 -- Regular grid: a bit of dangle gives the cover a marker-sticking-out
 -- character. Expanded (title) view: keep the glyph fully inside the
 -- cover so it doesn't crowd the title text below.
-local GLYPH_TOP_LIFT_REGULAR  = 0.85
+local GLYPH_TOP_LIFT_REGULAR  = 1.10
 local GLYPH_TOP_LIFT_EXPANDED = 1.55
 local function _glyphTopLift(show_titles)
     if show_titles then return GLYPH_TOP_LIFT_EXPANDED end

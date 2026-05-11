@@ -132,9 +132,8 @@ function Bookshelf:_registerStartWithMenu()
             local orig_cb = entry.callback
             entry.callback = function(...)
                 if orig_cb then orig_cb(...) end
-                if plugin._isShowing and plugin:_isShowing()
-                        and plugin._widget then
-                    UIManager:close(plugin._widget)
+                if _live_widget and UIManager:isWidgetShown(_live_widget) then
+                    UIManager:close(_live_widget)
                 end
             end
         end
@@ -215,18 +214,25 @@ function Bookshelf:_extendMenuOrder()
     }
 end
 
--- True when the BookshelfWidget instance is in the UIManager window stack
+-- True when the BookshelfWidget singleton is in the UIManager window stack
 -- (i.e. it's currently shown over FM, regardless of whether a Reader is
--- ALSO on top of it). Cleared via _on_close_callback when UIManager:close
--- removes our widget from the stack.
+-- ALSO on top of it).
+--
+-- Two Bookshelf plugin instances exist concurrently (one per host: FM and
+-- Reader), and several code paths can each be the one that created the
+-- widget (Bookshelf:show called from _takeOver, from a menu callback, from
+-- the start_with patch, from onShow). Tracking the widget on the
+-- per-instance self._widget made the canonical state ambiguous — e.g. the
+-- start_with menu callback captures `plugin` from _registerStartWithMenu
+-- and the main menu's text_func captures `outer` from addToMainMenu; if
+-- those bindings disagree about which instance owns the widget, the menu
+-- text drifts out of sync with what's on screen.
+--
+-- Module-level _live_widget is the only thing every code path agrees on,
+-- so use it as the source of truth here.
 function Bookshelf:_isShowing()
-    if not self._widget then return false end
-    local stack = UIManager._window_stack
-    if type(stack) ~= "table" then return false end
-    for _i, win in ipairs(stack) do
-        if win.widget == self._widget then return true end
-    end
-    return false
+    if not _live_widget then return false end
+    return UIManager:isWidgetShown(_live_widget)
 end
 
 function Bookshelf:addToMainMenu(menu_items)
@@ -248,7 +254,7 @@ function Bookshelf:addToMainMenu(menu_items)
         end,
         callback = function()
             if outer:_isShowing() then
-                UIManager:close(outer._widget)
+                UIManager:close(_live_widget)
             else
                 outer:show()
             end
@@ -260,7 +266,7 @@ function Bookshelf:addToMainMenu(menu_items)
         text                = _("Edit book detail view"),
         enabled_func        = function() return outer:_isShowing() end,
         sub_item_table_func = function()
-            S._bw = outer._widget
+            S._bw = _live_widget
             return S:_heroSubItems()
         end,
     }
@@ -270,7 +276,7 @@ function Bookshelf:addToMainMenu(menu_items)
         enabled_func        = function() return outer:_isShowing() end,
         separator           = true,
         sub_item_table_func = function()
-            S._bw = outer._widget
+            S._bw = _live_widget
             return S:_chipsSubItems()
         end,
     }
@@ -508,7 +514,7 @@ end
 -- "Open Bookshelf" / "Close Bookshelf" menu entry.
 function Bookshelf:onToggleBookshelf()
     if self:_isShowing() then
-        UIManager:close(self._widget)
+        UIManager:close(_live_widget)
     else
         self:_safeShow()
     end
@@ -521,7 +527,7 @@ function Bookshelf:onSetBookshelf(visible)
     if visible then
         if not self:_isShowing() then self:_safeShow() end
     else
-        if self:_isShowing() then UIManager:close(self._widget) end
+        if self:_isShowing() then UIManager:close(_live_widget) end
     end
     return true
 end
@@ -857,8 +863,8 @@ end
 -- a panel-wide e-ink refresh which clears any ghost pixels — the right
 -- hammer right after wake when the framebuffer state may be stale.
 function Bookshelf:_repaintAfterWake()
-    if self._widget and self:_isShowing() then
-        UIManager:setDirty(self._widget, "full")
+    if self:_isShowing() then
+        UIManager:setDirty(_live_widget, "full")
     end
 end
 

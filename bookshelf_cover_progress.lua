@@ -23,8 +23,15 @@ local function _enabled()
     return v == true
 end
 
--- Pure decision.
--- @param book table|nil with keys `status` (string|nil) and `book_pct` (number|nil)
+-- Lazy reference to bookshelf_book_repository for the readProgress fallback
+-- below. Required so chip paths that use the light book constructor
+-- (buildBookMeta -> no DocSettings read) still get status/pct without the
+-- expensive eager attachment.
+local _Repo
+
+-- Pure decision with a lazy filepath-based fallback for status/pct.
+-- @param book table|nil with keys `status` (string|nil), `book_pct` (number|nil)
+--             and optionally `filepath` (string|nil)
 -- @return table { bar=bool, bar_pct=number, glyph="in_progress"|"complete"|nil }
 function M.decide(book)
     local none = { bar = false, bar_pct = 0, glyph = nil }
@@ -32,6 +39,16 @@ function M.decide(book)
     if not book        then return none end
     local status = book.status
     local pct    = book.book_pct
+    -- Most shelf chips (getRecent, getLatest, getAll, ...) use the
+    -- light book constructor and don't open DocSettings -- book.status
+    -- arrives nil. Fall back to Repo.readProgress which is cached with
+    -- TTL, so the per-cover cost is bounded.
+    if status == nil and book.filepath then
+        if not _Repo then _Repo = require("bookshelf_book_repository") end
+        local p, s = _Repo.readProgress(book.filepath)
+        pct    = pct or p
+        status = s
+    end
     if status == "reading" then
         return { bar = (pct ~= nil), bar_pct = pct or 0, glyph = "in_progress" }
     elseif status == "complete" then

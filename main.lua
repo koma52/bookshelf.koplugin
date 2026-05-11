@@ -39,6 +39,8 @@ local Bookshelf = WidgetContainer:extend{
     is_doc_only = false, -- must be false: hook fires in Reader context
 }
 
+require("bookshelf_colour_palette").attach(Bookshelf)
+
 -- Tracks the live BookshelfWidget singleton across plugin instances. Two
 -- Bookshelf instances exist — one attached to FM, one to Reader — but the
 -- widget itself is a single shared overlay. The tracker lets either
@@ -230,8 +232,8 @@ function Bookshelf:_extendMenuOrder()
         "bookshelf_toggle",
         "bookshelf_hero_card",
         "bookshelf_shelf_tabs",
+        "bookshelf_settings",
         "bookshelf_updates",
-        "bookshelf_advanced",
         "bookshelf_about",
     }
 end
@@ -255,6 +257,30 @@ end
 function Bookshelf:_isShowing()
     if not _live_widget then return false end
     return UIManager:isWidgetShown(_live_widget)
+end
+
+-- Hide the touchmenu while a modal dialog is shown on top; returns a
+-- callback that restores the menu (re-shows it and refreshes items).
+-- Mirrors bookends' DialogHelpers.hideParentMenu so a ported widget that
+-- expects bookshelf:hideMenu(touchmenu_instance) works unchanged.
+function Bookshelf:hideMenu(touchmenu_instance)
+    if not touchmenu_instance then
+        return function() end
+    end
+    local menu_container = touchmenu_instance.show_parent
+        or touchmenu_instance.menu_container
+        or touchmenu_instance
+    if menu_container and UIManager and UIManager.close then
+        UIManager:close(menu_container)
+    end
+    return function()
+        if menu_container and UIManager and UIManager.show then
+            UIManager:show(menu_container)
+        end
+        if touchmenu_instance and touchmenu_instance.updateItems then
+            touchmenu_instance:updateItems()
+        end
+    end
 end
 
 function Bookshelf:addToMainMenu(menu_items)
@@ -305,54 +331,17 @@ function Bookshelf:addToMainMenu(menu_items)
         end,
     }
 
+    menu_items.bookshelf_settings = {
+        text                = _("Settings"),
+        sub_item_table_func = function()
+            S._bw = _live_widget
+            return S:_settingsSubItems()
+        end,
+    }
+
     menu_items.bookshelf_updates = {
         text                = _("Updates"),
         sub_item_table_func = function() return S:_updateSubItems() end,
-    }
-
-    menu_items.bookshelf_advanced = {
-        text           = _("Advanced settings"),
-        sub_item_table = {
-            {
-                text     = _("Scan all library metadata"),
-                callback = function(touchmenu_instance)
-                    if touchmenu_instance then
-                        UIManager:close(touchmenu_instance)
-                    end
-                    UIManager:nextTick(function() outer:scanAllMetadata() end)
-                end,
-            },
-            {
-                text     = _('"Latest" walk depth'),
-                callback = function() S:_pickLatestDepth() end,
-            },
-            {
-                text = _("BETA: Read calibre metadata.calibre"),
-                help_text = _("For users with a Calibre-managed library. "
-                    .. "Reads the metadata.calibre JSON file at home_dir to "
-                    .. "cover title / authors / series / tags / language for "
-                    .. "every book in the library — no per-book extraction "
-                    .. "needed. BIM-cached metadata still wins per field; "
-                    .. "Calibre data only fills gaps."),
-                checked_func   = function()
-                    return G_reader_settings:readSetting("bookshelf_calibre_metadata") == true
-                end,
-                keep_menu_open = true,
-                callback = function()
-                    local enabled = G_reader_settings:readSetting("bookshelf_calibre_metadata") == true
-                    G_reader_settings:saveSetting("bookshelf_calibre_metadata", not enabled)
-                    G_reader_settings:flush()
-                    local ok, Repo = pcall(require, "bookshelf_book_repository")
-                    if ok and Repo and Repo.invalidateWalkCache then
-                        Repo.invalidateWalkCache()
-                    end
-                    if S._bw and S._bw._rebuild then
-                        S._bw:_rebuild()
-                        UIManager:setDirty(S._bw, "ui")
-                    end
-                end,
-            },
-        },
     }
 
     menu_items.bookshelf_about = {
@@ -729,45 +718,6 @@ function Bookshelf:editDevBranch(touchmenu_instance)
     dlg:onShowKeyboard()
 end
 
--- Open a single-line dialog to set / change / clear the GitHub PAT used for
--- authenticated downloads from the private repo.
-function Bookshelf:editGitHubToken(touchmenu_instance)
-    local InputDialog = require("ui/widget/inputdialog")
-    local dlg
-    dlg = InputDialog:new{
-        title      = _("GitHub access token"),
-        input      = G_reader_settings:readSetting("bookshelf_github_pat") or "",
-        input_hint = _("Personal access token (leave empty to clear)"),
-        buttons = {{
-            {
-                text     = _("Cancel"),
-                id       = "close",
-                callback = function() UIManager:close(dlg) end,
-            },
-            {
-                text             = _("Save"),
-                is_enter_default = true,
-                callback         = function()
-                    local raw     = dlg:getInputText() or ""
-                    local trimmed = raw:gsub("^%s+", ""):gsub("%s+$", "")
-                    if trimmed == "" then
-                        G_reader_settings:delSetting("bookshelf_github_pat")
-                    else
-                        G_reader_settings:saveSetting("bookshelf_github_pat", trimmed)
-                    end
-                    G_reader_settings:flush()
-                    UIManager:close(dlg)
-                    if touchmenu_instance and touchmenu_instance.updateItems then
-                        touchmenu_instance:updateItems()
-                    end
-                end,
-            },
-        }},
-    }
-    UIManager:show(dlg)
-    dlg:onShowKeyboard()
-end
-
 -- Trigger a full BIM metadata scan of the library directory. Uses
 -- extractBooksInDirectory which provides interactive progress dialogs and
 -- handles recursive/refresh/prune choices. After completion, invalidates
@@ -884,6 +834,18 @@ end
 function Bookshelf:_repaintAfterWake()
     if self:_isShowing() then
         UIManager:setDirty(_live_widget, "full")
+    end
+end
+
+-- When KOReader toggles colour rendering at runtime, flush the bookshelf_colour
+-- hex cache so progress-bar colours pick up the new mode, then rebuild the
+-- live widget if it is currently shown.
+function Bookshelf:onColorRenderingUpdate()
+    local ok, Colour = pcall(require, "bookshelf_colour")
+    if ok then Colour.flushCache() end
+    if _live_widget and _live_widget._rebuild then
+        _live_widget:_rebuild()
+        UIManager:setDirty(_live_widget, "ui")
     end
 end
 

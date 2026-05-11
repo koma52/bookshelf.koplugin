@@ -24,6 +24,7 @@ local GestureRange    = require("ui/gesturerange")
 local Size            = require("ui/size")
 local InputContainer  = require("ui/widget/container/inputcontainer")
 local Screen          = require("device").screen
+local CoverProgress   = require("bookshelf_cover_progress")
 
 -- Shadow geometry shared by both render paths.
 local SHADOW_OFFSET   = Screen:scaleBySize(4)       -- shadow offset in dp
@@ -36,6 +37,54 @@ local CARD_BORDER     = Screen:scaleBySize(1)       -- 1dp border on the card
 -- no change in the slot's outer footprint.
 local SELECTED_BORDER = SHADOW_OFFSET
 local SHADOW_GRAY     = Blitbuffer.gray(0.5)        -- grey level for the shadow
+
+-- Glyph sizing for the in-progress / finished badge on covers.
+-- Scaled with cover width but floored so tiny columns don't render
+-- a glyph too small to read. 80% of the original sizing so the glyph
+-- doesn't crowd the title text in expanded (title-view) mode.
+local function _glyphSize(card_w)
+    local px = math.max(Screen:scaleBySize(9), math.floor(card_w * 0.132))
+    return px
+end
+
+-- Vertical placement of the in-progress glyph relative to the card.
+-- The glyph's top sits at (card_h - glyph_h * GLYPH_TOP_LIFT_*).
+--   * < 1.0 -> glyph dangles below the card (1 - lift fraction of glyph_h)
+--   * = 1.0 -> glyph bottom touches card bottom
+--   * > 1.0 -> glyph fully inside card, lift-1 fraction above card bottom
+-- Regular grid: a bit of dangle gives the cover a marker-sticking-out
+-- character. Expanded (title) view: keep the glyph fully inside the
+-- cover so it doesn't crowd the title text below.
+local GLYPH_TOP_LIFT_REGULAR  = 1.10
+local GLYPH_TOP_LIFT_EXPANDED = 1.55
+local function _glyphTopLift(show_titles)
+    if show_titles then return GLYPH_TOP_LIFT_EXPANDED end
+    return GLYPH_TOP_LIFT_REGULAR
+end
+
+-- Horizontal inset of the glyph from the card's left edge.
+local function _glyphLeftInset()
+    return Size.padding.small + Screen:scaleBySize(2)
+end
+
+-- Pixel thickness of the progress bar (rounded pill on top of cover).
+-- Bookends-style rounded look needs more vertical room than a stripe.
+local function _barHeight()
+    return Screen:scaleBySize(8)
+end
+
+-- Padding between the bar's bottom edge and the card's inside-border.
+-- Matches the horizontal side margin so the bar reads as evenly inset
+-- from all three nearby cover edges (left, right, bottom).
+local function _barBottomPadding()
+    return Screen:scaleBySize(3)
+end
+
+-- Horizontal margin between the bar and the card sides (inset from the
+-- card's inside-border so the rounded bar doesn't kiss the cover edges).
+local function _barSideMargin()
+    return Screen:scaleBySize(3)
+end
 
 -- A simple Widget subclass that paints a rounded rectangle in a fixed grey.
 -- Used as the shadow layer behind every cover. Has its own dimen so
@@ -255,7 +304,26 @@ local SpineWidget = InputContainer:extend{
     -- the copies leak across chip rebuilds.
     cover_bb            = nil,
     cover_bb_disposable = false,
+    -- Cover-level progress indicators (top-edge bar + bottom-left
+    -- bookmark glyph) are a grid-cell affordance only. Hero card,
+    -- folder stacks, and series stacks reuse SpineWidget for the
+    -- underlying cover but should NOT show indicators -- they'd
+    -- appear above/around overlay graphics. Opt-in from ShelfRow.
+    show_progress       = false,
+    -- ShelfRow's expanded mode renders book titles BELOW each cover.
+    -- The bookmark glyph at the bottom-left would clash with the title
+    -- if it dangled; lift it fully inside the cover when titles are
+    -- visible. Regular grid: glyph can dangle for character.
+    show_titles         = false,
 }
+
+-- Gate the "#N" series-number badge. Default true; users can switch it
+-- off via Settings -> Cover progress indicators -> Show series #.
+local function _showSeriesNum()
+    local v = G_reader_settings:readSetting("bookshelf_show_series_num")
+    if v == nil then return true end
+    return v == true
+end
 
 function SpineWidget:init()
     self.dimen = Geom:new{ w = self.width, h = self.height }
@@ -286,46 +354,163 @@ end
 --     position by exactly the padding amount — straightforward, no centering
 --     surprises.
 function SpineWidget:_renderShadowedCard(inner)
-    local card_w = self.width  - SHADOW_OFFSET
-    local card_h = self.height - SHADOW_OFFSET
-    -- Selected state: skip the shadow, keep the cover at exactly the
-    -- same (0,0)–(card_w, card_h) position as unselected, and overlay
-    -- a thick black border at the cover perimeter. The cover image's
-    -- pixel position and size do not change between states — the
-    -- e-ink diff is only the perimeter pixels (thin border → thick
-    -- border) plus the shadow's L-shape disappearing, which avoids
-    -- the jarring full-cover redraw a position-shift causes.
+    local card_w, card_h = self:_cardDimensions()
+    local indicators     = self.show_progress
+        and CoverProgress.decide(self.book)
+        or  { bar = false, bar_pct = 0, glyph = nil }
+
+    local children = {}
+
+    -- 1. Shadow OR selection-border backdrop (z-order: bottom)
     if self.is_selected then
-        return OverlapGroup:new{
-            dimen = Geom:new{ w = self.width, h = self.height },
-            -- Backdrop paints first (behind), cover paints on top with
-            -- its untouched rendering. The visible "ring" is the band
-            -- of backdrop pixels that the cover doesn't overpaint.
-            BorderOverlay:new{
-                width     = card_w,
-                height    = card_h,
-                thickness = SELECTED_BORDER,
-                radius    = CARD_RADIUS,
-            },
-            inner,
-        }, card_w, card_h
+        children[#children + 1] = BorderOverlay:new{
+            width     = card_w,
+            height    = card_h,
+            thickness = SELECTED_BORDER,
+            radius    = CARD_RADIUS,
+        }
+    else
+        children[#children + 1] = FrameContainer:new{
+            bordersize   = 0,
+            padding      = 0,
+            padding_top  = SHADOW_OFFSET,
+            padding_left = SHADOW_OFFSET,
+            ShadowRect:new{ width = card_w, height = card_h },
+        }
     end
-    local shadow_wrapper = FrameContainer:new{
-        bordersize   = 0,
-        padding      = 0,
-        padding_top  = SHADOW_OFFSET,
-        padding_left = SHADOW_OFFSET,
-        ShadowRect:new{ width = card_w, height = card_h },
-    }
+
+    -- 2. In-progress glyph (IN FRONT of inner): anchored so its top is
+    --    GLYPH_TOP_LIFT * glyph_h above the card bottom (i.e. the entire
+    --    glyph sits inside the cover, bottom at card_h - 0.35*glyph_h).
+    if indicators.glyph == "in_progress" then
+        local colours = CoverProgress.resolvedColours()
+        local glyph_h = _glyphSize(card_w)
+        local glyph_w = self:_glyphWidth(glyph_h)
+        if glyph_w <= card_w * 0.4 then
+            local glyph = CoverProgress.buildGlyphWidget(
+                CoverProgress.GLYPH_BOOKMARK, glyph_h, colours.fill)
+            local lift = _glyphTopLift(self.show_titles)
+            local y_offset = card_h - math.floor(glyph_h * lift + 0.5)
+            children[#children + 1] = FrameContainer:new{
+                bordersize   = 0,
+                padding      = 0,
+                padding_top  = y_offset,
+                padding_left = _glyphLeftInset(),
+                glyph,
+            }
+        end
+    end
+
+    -- 3. Inner card (image or fallback) at (0,0)
+    children[#children + 1] = inner
+
+    -- 4. Finished glyph (IN FRONT of inner): SAME position as the in-progress
+    --    glyph (bottom-left, lifted by GLYPH_TOP_LIFT), but white with a
+    --    black halo so the hollow check stays legible against any cover.
+    if indicators.glyph == "complete" then
+        local glyph_h = _glyphSize(card_w)
+        local glyph_w = self:_glyphWidth(glyph_h)
+        if glyph_w <= card_w * 0.4 then
+            local halo_w = 1
+            local outlined = CoverProgress.buildOutlinedGlyphWidget(
+                CoverProgress.GLYPH_BOOKMARK_CHECK, glyph_h, halo_w)
+            -- Offset by -halo_w so the glyph's CENTRE aligns with the
+            -- in-progress glyph's position (outlined widget is 2*halo_w
+            -- larger on each axis).
+            local lift = _glyphTopLift(self.show_titles)
+            local y_offset = card_h - math.floor(glyph_h * lift + 0.5)
+            children[#children + 1] = FrameContainer:new{
+                bordersize   = 0,
+                padding      = 0,
+                padding_top  = y_offset - halo_w,
+                padding_left = _glyphLeftInset() - halo_w,
+                outlined,
+            }
+        end
+    end
+
+    -- 5. Progress bar (IN FRONT of cover artwork, bottom-inside-border,
+    --    1dp padding above card's inside border). Rounded pill style,
+    --    overlaid on the cover -- no image-shrink.
+    if indicators.bar then
+        local colours = CoverProgress.resolvedColours()
+        local bar_h   = _barHeight()
+        local bar_pad = _barBottomPadding()
+        local side    = _barSideMargin()
+        local bar_w   = card_w - 2 * CARD_BORDER - 2 * side
+        if bar_w > 0 then
+            local bar = CoverProgress.buildBarWidget(
+                bar_w, bar_h,
+                indicators.bar_pct, colours.fill, colours.track)
+            children[#children + 1] = FrameContainer:new{
+                bordersize   = 0,
+                padding      = 0,
+                padding_top  = card_h - CARD_BORDER - bar_pad - bar_h,
+                padding_left = CARD_BORDER + side,
+                bar,
+            }
+        end
+    end
+
+    -- 6. Series-number badge. White rounded pill with "#N" at top-right,
+    --    sitting proud of the cover by SHADOW_OFFSET -- matches the
+    --    SeriesStack "xN" count badge style. Shown on any cover whose
+    --    book has a series_num (regardless of which chip / drilldown the
+    --    user got here from), gated by:
+    --      * self.show_progress -- grid-only surface (hero / folder /
+    --        series stacks reuse SpineWidget but opt out).
+    --      * Setting bookshelf_show_series_num (default ON).
+    if self.show_progress and _showSeriesNum()
+            and self.book and self.book.series_num then
+        local TextWidget     = require("ui/widget/textwidget")
+        local Font           = require("ui/font")
+        local badge = FrameContainer:new{
+            bordersize     = Size.border.thin,
+            background     = Blitbuffer.COLOR_WHITE,
+            radius         = Screen:scaleBySize(3),
+            padding_left   = Size.padding.default,
+            padding_right  = Size.padding.default,
+            padding_top    = Size.padding.small,
+            padding_bottom = Size.padding.small,
+            TextWidget:new{
+                text = "#" .. tostring(self.book.series_num),
+                face = Font:getFace("smallinfofont", 12),
+                bold = true,
+            },
+        }
+        local badge_w       = badge:getSize().w
+        local cover_right_x = card_w
+        local badge_x       = math.max(0, math.min(self.width - badge_w,
+                                  cover_right_x - math.floor(badge_w / 2)))
+        badge.overlap_offset = { badge_x, -SHADOW_OFFSET }
+        children[#children + 1] = badge
+    end
+
     return OverlapGroup:new{
         dimen = Geom:new{ w = self.width, h = self.height },
-        shadow_wrapper,   -- paints first, behind the cover
-        inner,            -- paints on top at (0,0), occupies top-left card_w × card_h
+        unpack(children),
     }, card_w, card_h
 end
 
+-- Cheap approximation of the rendered width of a single nerd-font glyph at
+-- the given height: nerd-font glyphs are roughly square at this face, so
+-- glyph_w ≈ glyph_h. Used only to suppress the glyph on very narrow cards.
+function SpineWidget:_glyphWidth(glyph_h)
+    return glyph_h
+end
+
+-- Computed card dimensions taking the in-progress glyph's dangle into
+-- account. Both _renderCover and _renderFallback must use this when
+-- sizing their inner card widget so the card doesn't overlap the
+-- dangle zone that _renderShadowedCard reserves on the bottom edge.
+function SpineWidget:_cardDimensions()
+    -- Glyph is now fully INSIDE the card (no dangle), so no extra
+    -- bottom-margin reservation needed.
+    return self.width - SHADOW_OFFSET, self.height - SHADOW_OFFSET
+end
+
 function SpineWidget:_renderCover(bb)
-    local card_w, card_h = self.width - SHADOW_OFFSET, self.height - SHADOW_OFFSET
+    local card_w, card_h = self:_cardDimensions()
     -- The card-perimeter border stays thin in both states so the cover
     -- image's pixel position and size are identical between selected
     -- and unselected. The selection cue is a thicker BorderOverlay
@@ -333,6 +518,10 @@ function SpineWidget:_renderCover(bb)
     local border = CARD_BORDER
     local img_w = card_w - 2 * border
     local img_h = card_h - 2 * border
+
+    -- Bar overlays the cover artwork (rounded pill on top); no image
+    -- shrinking required. The image fills the card normally.
+
     local bb_w  = bb:getWidth()
     local bb_h  = bb:getHeight()
 
@@ -459,8 +648,7 @@ function SpineWidget:_renderFallback()
     local LineWidget      = require("ui/widget/linewidget")
     local Font            = require("ui/font")
 
-    local card_w = self.width  - SHADOW_OFFSET
-    local card_h = self.height - SHADOW_OFFSET
+    local card_w, card_h = self:_cardDimensions()
     local border = CARD_BORDER
 
     -- Vintage-cover layout. Outer card paints a paper-tone background +
@@ -472,10 +660,18 @@ function SpineWidget:_renderFallback()
     -- glyph) + author. Each text region caps at a fraction of card_h
     -- so a long title doesn't push the author off the bottom at small
     -- slot sizes.
-    local inset_h    = math.max(Screen:scaleBySize(6), math.floor(card_w * 0.06))
-    local inset_v    = math.max(Screen:scaleBySize(8), math.floor(card_h * 0.06))
+    local inset_h        = math.max(Screen:scaleBySize(6), math.floor(card_w * 0.06))
+    local inset_v_top    = math.max(Screen:scaleBySize(8), math.floor(card_h * 0.06))
+    -- Bottom inset grows to contain the progress bar (when shown) so the
+    -- rounded pill sits within the paper-tone bottom strip with the same
+    -- breathing room above the bar as below it (bar_pad on each side).
+    local inset_v_bottom = inset_v_top
+    if self.show_progress and CoverProgress.decide(self.book).bar then
+        local needed = CARD_BORDER + 2 * _barBottomPadding() + _barHeight()
+        if needed > inset_v_bottom then inset_v_bottom = needed end
+    end
     local outer_inset_w = card_w - inset_h * 2
-    local outer_inset_h = card_h - inset_v * 2
+    local outer_inset_h = card_h - inset_v_top - inset_v_bottom
     local content_pad   = math.max(Screen:scaleBySize(4), math.floor(card_w * 0.04))
     local content_w     = outer_inset_w - border * 2 - content_pad * 2
 
@@ -559,14 +755,22 @@ function SpineWidget:_renderFallback()
     }
 
     -- Outer card: paper-tone background, rounded corners, thin border.
+    -- VerticalGroup composes [top spacer | inner_frame | bottom spacer]
+    -- so the inner-frame sits in the upper portion when the bottom inset
+    -- is enlarged for the progress bar (asymmetric insets).
     local card = FrameContainer:new{
         bordersize = border,
         radius     = CARD_RADIUS,
         padding    = 0,
         background = Blitbuffer.gray(0.08),
-        CenterContainer:new{
-            dimen = Geom:new{ w = card_w - border * 2, h = card_h - border * 2 },
-            inner_frame,
+        VerticalGroup:new{
+            align = "center",
+            VerticalSpan:new{ width = inset_v_top - border },
+            CenterContainer:new{
+                dimen = Geom:new{ w = card_w - border * 2, h = outer_inset_h },
+                inner_frame,
+            },
+            VerticalSpan:new{ width = inset_v_bottom - border },
         },
     }
     return (self:_renderShadowedCard(card))

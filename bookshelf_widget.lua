@@ -1556,11 +1556,6 @@ function BookshelfWidget:_buildShelfRows(items, content_w, shelf_h, PAD, n_rows)
     -- book as the preview — single tap collapses-back-and-shows-it. In
     -- normal mode it's the existing _previewBook (preview-only) behaviour.
     local n_cols   = self:_nCols()
-    -- True when the user has drilled into a series; covers in this view
-    -- should show their per-book series_num at top-right, mirroring the
-    -- SeriesStack count badge.
-    local tip = self._drilldown_path and self._drilldown_path[#self._drilldown_path]
-    local in_series_drilldown = tip and tip.kind == "series" or false
     local row_opts = {
         width             = content_w,
         height            = shelf_h,
@@ -1568,7 +1563,6 @@ function BookshelfWidget:_buildShelfRows(items, content_w, shelf_h, PAD, n_rows)
         n_slots           = n_cols,
         selected_filepath = selected_filepath,
         show_titles       = self._expanded,
-        show_series_num   = in_series_drilldown,
         -- Expanded mode is "browse to open" — single tap opens the book.
         -- Normal mode is "preview, then commit" — tap shelf cover stages it
         -- in the hero, tap hero opens.

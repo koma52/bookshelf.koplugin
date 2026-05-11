@@ -554,7 +554,9 @@ function Settings:_progressIndicatorsSubItems()
         toggleRow("bookshelf_progress_bar_enabled",
                   _("Show progress bars"), false),
         toggleRow("bookshelf_progress_badge_enabled",
-                  _("Show completed book badge"), true),
+                  _("Show completed book badge"), false),
+        toggleRow("bookshelf_show_series_num",
+                  _("Show series #"), true),
         {
             text_func = function()
                 return _("Read color") .. ": " .. valueLabel("fill")

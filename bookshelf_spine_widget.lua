@@ -315,11 +315,15 @@ local SpineWidget = InputContainer:extend{
     -- if it dangled; lift it fully inside the cover when titles are
     -- visible. Regular grid: glyph can dangle for character.
     show_titles         = false,
-    -- Inside a series drilldown, render a small "#N" badge at top-right
-    -- of each cover so the position within the series is at-a-glance.
-    -- Mirrors the SeriesStack "xN" count badge style for continuity.
-    show_series_num     = false,
 }
+
+-- Gate the "#N" series-number badge. Default true; users can switch it
+-- off via Settings -> Cover progress indicators -> Show series #.
+local function _showSeriesNum()
+    local v = G_reader_settings:readSetting("bookshelf_show_series_num")
+    if v == nil then return true end
+    return v == true
+end
 
 function SpineWidget:init()
     self.dimen = Geom:new{ w = self.width, h = self.height }
@@ -448,12 +452,16 @@ function SpineWidget:_renderShadowedCard(inner)
         end
     end
 
-    -- 6. Series-number badge (in series drilldown only). White rounded
-    --    pill with "#N" at top-right, sitting proud of the cover by
-    --    SHADOW_OFFSET -- matches the SeriesStack "xN" count badge style
-    --    so the count-on-stack -> number-on-cover transition feels
-    --    continuous when the user drills in.
-    if self.show_series_num and self.book and self.book.series_num then
+    -- 6. Series-number badge. White rounded pill with "#N" at top-right,
+    --    sitting proud of the cover by SHADOW_OFFSET -- matches the
+    --    SeriesStack "xN" count badge style. Shown on any cover whose
+    --    book has a series_num (regardless of which chip / drilldown the
+    --    user got here from), gated by:
+    --      * self.show_progress -- grid-only surface (hero / folder /
+    --        series stacks reuse SpineWidget but opt out).
+    --      * Setting bookshelf_show_series_num (default ON).
+    if self.show_progress and _showSeriesNum()
+            and self.book and self.book.series_num then
         local TextWidget     = require("ui/widget/textwidget")
         local Font           = require("ui/font")
         local badge = FrameContainer:new{

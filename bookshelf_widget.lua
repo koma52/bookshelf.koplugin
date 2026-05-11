@@ -2940,6 +2940,84 @@ function BookshelfWidget:_openBookMenu(item)
               end) },
         },
     }
+
+    -- Status row (Reading / On hold / Finished) + Reset / Delete row.
+    -- KOReader's filemanagerutil provides the canonical button generators
+    -- (status enum + cache updates + Reset confirmation dialog), and
+    -- FileManager:showDeleteFileDialog the canonical Delete flow -- reuse
+    -- both so we inherit any future behavioural fixes for free.
+    local filemanagerutil = require("apps/filemanager/filemanagerutil")
+    local function refresh_book_state()
+        Repo.invalidateProgressCache(book.filepath)
+        bw:_rebuild()
+        UIManager:setDirty(bw, "ui")
+    end
+    local function status_callback()
+        UIManager:close(dialog)
+        refresh_book_state()
+    end
+    buttons[#buttons + 1] = filemanagerutil.genStatusButtonsRow(
+        book.filepath, status_callback)
+
+    -- Reset: KOReader's generator opens its own ConfirmBox with checkboxes
+    -- (settings / cover / metadata). Close our dialog before the ConfirmBox
+    -- shows so it appears on a clean backdrop; the generator's caller_callback
+    -- runs only on confirmation (handles the rebuild after).
+    local reset_btn = filemanagerutil.genResetSettingsButton(
+        book.filepath, function()
+            Repo.invalidateProgressCache(book.filepath)
+            Repo.invalidateWalkCache()  -- sidecar gone -> walk results stale
+            bw:_rebuild()
+            UIManager:setDirty(bw, "ui")
+        end)
+    local orig_reset_cb = reset_btn.callback
+    reset_btn.callback = function()
+        UIManager:close(dialog)
+        orig_reset_cb()
+    end
+
+    -- Delete: prefer FileManager:showDeleteFileDialog when available so the
+    -- per-file confirmation, history/collection cleanup, and sdr purge all
+    -- match FM. Fall back to a minimal inline confirm + os.remove when
+    -- bookshelf is running outside an FM context.
+    local delete_btn = {
+        text = _("Delete"),
+        callback = function()
+            UIManager:close(dialog)
+            local FileManager = require("apps/filemanager/filemanager")
+            if FileManager.instance and FileManager.instance.showDeleteFileDialog then
+                FileManager.instance:showDeleteFileDialog(book.filepath, function()
+                    Repo.invalidateProgressCache(book.filepath)
+                    Repo.invalidateWalkCache()
+                    bw:_rebuild()
+                    UIManager:setDirty(bw, "ui")
+                end)
+            else
+                local ConfirmBox = require("ui/widget/confirmbox")
+                UIManager:show(ConfirmBox:new{
+                    text     = _("Delete file permanently?") .. "\n\n" .. book.filepath,
+                    ok_text  = _("Delete"),
+                    ok_callback = function()
+                        if os.remove(book.filepath) then
+                            require("readhistory"):fileDeleted(book.filepath)
+                            ReadCollection:removeItem(book.filepath)
+                            Repo.invalidateProgressCache(book.filepath)
+                            Repo.invalidateWalkCache()
+                            bw:_rebuild()
+                            UIManager:setDirty(bw, "ui")
+                        else
+                            UIManager:show(require("ui/widget/infomessage"):new{
+                                text = _("Failed to delete file."),
+                                icon = "notice-warning",
+                            })
+                        end
+                    end,
+                })
+            end
+        end,
+    }
+    buttons[#buttons + 1] = { reset_btn, delete_btn }
+
     for _, row in ipairs(nav_rows) do
         buttons[#buttons + 1] = row
     end

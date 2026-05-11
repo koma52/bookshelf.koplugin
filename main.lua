@@ -922,4 +922,16 @@ function Bookshelf:_repaintAfterWake()
     end
 end
 
+-- When KOReader toggles colour rendering at runtime, flush the bookshelf_colour
+-- hex cache so progress-bar colours pick up the new mode, then rebuild the
+-- live widget if it is currently shown.
+function Bookshelf:onColorRenderingUpdate()
+    local ok, Colour = pcall(require, "bookshelf_colour")
+    if ok then Colour.flushCache() end
+    if _live_widget and _live_widget._rebuild then
+        _live_widget:_rebuild()
+        UIManager:setDirty(_live_widget, "ui")
+    end
+end
+
 return Bookshelf

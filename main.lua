@@ -356,13 +356,10 @@ function Bookshelf:show()
                 self._widget.dimen.h = self._widget.height
             end
         end
-        self._widget:_rebuild()
-        -- _openBook stopped the status timer when the reader took over;
-        -- restart it now that bookshelf is the foreground again.
-        if self._widget._startStatusTimer then
-            self._widget:_startStatusTimer()
-        end
-        UIManager:setDirty(self._widget, "ui")
+        -- softRefresh splits the warm-path update so the existing tree
+        -- paints immediately and the heavier shelf re-sort runs ~150ms
+        -- later — much snappier than the previous full _rebuild() inline.
+        self._widget:softRefresh()
         return
     end
     local BookshelfWidget = require("bookshelf_widget")

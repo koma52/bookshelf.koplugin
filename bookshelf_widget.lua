@@ -2027,6 +2027,51 @@ function BookshelfWidget:_swapShelvesInPlace()
 end
 
 -- Rebuild the hero from current state and swap it into _hero_parent[1].
+-- softRefresh — lightweight return-to-bookshelf update. Splits the work
+-- the warm-path show() previously did as a single _rebuild() into two
+-- phases: the hero swap (synchronous, ~10ms — only depends on the current
+-- book, which is the dominant thing that changed during the reader
+-- session) and the shelf swap (deferred ~150ms, much heavier because of
+-- the fetch + sort + BIM hydration).
+--
+-- The user-perceived effect is that bookshelf "reappears" instantly with
+-- the existing shelves still on screen, then re-sorts a moment later. A
+-- full _rebuild() would have held the EPDC on a black screen for the
+-- whole fetch+sort cost.
+--
+-- Falls back to _rebuild() when the live tree can't be reused (cold widget,
+-- expanded/tall layouts the in-place swap helpers don't handle).
+function BookshelfWidget:softRefresh()
+    local has_live_tree =
+        self._inner_vgroup and self._shelf_dims
+        and self._hero_parent and self._hero_dims
+    -- Two-shelf gate: _swapShelvesInPlace's own fast-path bailout. Falling
+    -- back to _rebuild here is cheaper than triggering it from the deferred
+    -- callback after we've already painted a stale tree.
+    if not has_live_tree or self:_nShelves() ~= 2 then
+        self:_rebuild()
+        if self._startStatusTimer then self:_startStatusTimer() end
+        UIManager:setDirty(self, "ui")
+        return
+    end
+    -- Hero now: the current book's progress / last-read time / cover
+    -- almost always changed during the reader session, and the swap is
+    -- cheap (one HeroCard build, no fetch).
+    self:_swapHeroInPlace()
+    UIManager:setDirty(self, "ui")
+    if self._startStatusTimer then self:_startStatusTimer() end
+    -- Cancel any earlier deferred shelf swap that hasn't fired (two quick
+    -- reader open/close cycles); the later one supersedes.
+    if self._soft_refresh_shelves_fn then
+        UIManager:unschedule(self._soft_refresh_shelves_fn)
+    end
+    self._soft_refresh_shelves_fn = function()
+        self._soft_refresh_shelves_fn = nil
+        self:_swapShelvesInPlace()
+    end
+    UIManager:scheduleIn(0.15, self._soft_refresh_shelves_fn)
+end
+
 -- Shared between _previewBook (synchronous swap on user tap) and the async
 -- cover-load completion path. No-op if there's no live tree to swap into.
 --

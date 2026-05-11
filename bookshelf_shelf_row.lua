@@ -202,7 +202,10 @@ function ShelfRow.new(opts)
                 -- Plumb expanded-mode flag so SpineWidget can lift the
                 -- bookmark glyph fully inside the cover (avoiding clash
                 -- with the title text below). Regular mode lets it dangle.
-                show_titles   = opts.show_titles,
+                show_titles     = opts.show_titles,
+                -- Show "#N" series-number badge at top-right when the
+                -- user has drilled into a series.
+                show_series_num = opts.show_series_num,
             }
             if opts.show_titles then
                 local title_text = item.title or

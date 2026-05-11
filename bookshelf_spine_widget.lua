@@ -315,6 +315,10 @@ local SpineWidget = InputContainer:extend{
     -- if it dangled; lift it fully inside the cover when titles are
     -- visible. Regular grid: glyph can dangle for character.
     show_titles         = false,
+    -- Inside a series drilldown, render a small "#N" badge at top-right
+    -- of each cover so the position within the series is at-a-glance.
+    -- Mirrors the SeriesStack "xN" count badge style for continuity.
+    show_series_num     = false,
 }
 
 function SpineWidget:init()
@@ -442,6 +446,36 @@ function SpineWidget:_renderShadowedCard(inner)
                 bar,
             }
         end
+    end
+
+    -- 6. Series-number badge (in series drilldown only). White rounded
+    --    pill with "#N" at top-right, sitting proud of the cover by
+    --    SHADOW_OFFSET -- matches the SeriesStack "xN" count badge style
+    --    so the count-on-stack -> number-on-cover transition feels
+    --    continuous when the user drills in.
+    if self.show_series_num and self.book and self.book.series_num then
+        local TextWidget     = require("ui/widget/textwidget")
+        local Font           = require("ui/font")
+        local badge = FrameContainer:new{
+            bordersize     = Size.border.thin,
+            background     = Blitbuffer.COLOR_WHITE,
+            radius         = Screen:scaleBySize(3),
+            padding_left   = Size.padding.default,
+            padding_right  = Size.padding.default,
+            padding_top    = Size.padding.small,
+            padding_bottom = Size.padding.small,
+            TextWidget:new{
+                text = "#" .. tostring(self.book.series_num),
+                face = Font:getFace("smallinfofont", 12),
+                bold = true,
+            },
+        }
+        local badge_w       = badge:getSize().w
+        local cover_right_x = card_w
+        local badge_x       = math.max(0, math.min(self.width - badge_w,
+                                  cover_right_x - math.floor(badge_w / 2)))
+        badge.overlap_offset = { badge_x, -SHADOW_OFFSET }
+        children[#children + 1] = badge
     end
 
     return OverlapGroup:new{

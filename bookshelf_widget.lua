@@ -2424,6 +2424,25 @@ end
 -- UIManager calls paintTo in the new rotated frame while self.dimen still
 -- holds the old portrait size, placing the bottom of the widget off-screen.
 function BookshelfWidget:paintTo(bb, x, y)
+    -- Skip painting when a transitional widget (one flagged invisible) sits
+    -- on top of us. The motivating case is a seamless ReaderUI reload
+    -- (the terminal step of CRE's partial-rerendering automation after a
+    -- font/style change): ReaderUI:reloadDocument tears down the reader,
+    -- queues an invisible "Opening file..." InfoMessage placeholder, and
+    -- calls UIManager:forceRePaint between the close and the re-show.
+    -- UIManager marks us dirty when the reader is removed, so without this
+    -- guard we'd paint the full shelf into the framebuffer here — and the
+    -- placeholder InfoMessage's refresh callback returns ("ui", movable.dimen)
+    -- with movable.dimen == nil (an invisible InfoMessage never paints),
+    -- which degrades to a full-screen refresh in UIManager:_refresh. Net
+    -- result without the guard: ~1s of full-screen bookshelf flashed between
+    -- the old reader page and the freshly-rerendered one. The same heuristic
+    -- correctly suppresses paint under TrapWidget / ScreensaverLockWidget,
+    -- where preserving the previous framebuffer is the desired behaviour.
+    local stack = UIManager._window_stack
+    local top = stack and stack[#stack] and stack[#stack].widget
+    if top and top.invisible then return end
+
     local sw = Screen:getWidth()
     local sh = Screen:getHeight()
     if sw ~= self.width or sh ~= self.height then

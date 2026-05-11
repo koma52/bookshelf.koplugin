@@ -60,8 +60,10 @@ local function _barHeight()
 end
 
 -- Padding between the bar's bottom edge and the card's inside-border.
+-- Matches the horizontal side margin so the bar reads as evenly inset
+-- from all three nearby cover edges (left, right, bottom).
 local function _barBottomPadding()
-    return Screen:scaleBySize(1)
+    return Screen:scaleBySize(3)
 end
 
 -- Horizontal margin between the bar and the card sides (inset from the

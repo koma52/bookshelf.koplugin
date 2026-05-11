@@ -527,23 +527,34 @@ function Settings:_progressIndicatorsSubItems()
             _("Default"))
     end
 
-    return {
-        {
-            text = _("Show progress indicators"),
+    -- Three independent toggles (defaults all ON when unset). Inline the
+    -- builder so each row reads/writes its own setting key without
+    -- repetition.
+    local function toggleRow(setting_key, label, separator)
+        return {
+            text = label,
             checked_func = function()
-                local v = G_reader_settings:readSetting("bookshelf_progress_enabled")
+                local v = G_reader_settings:readSetting(setting_key)
                 if v == nil then return true end
                 return v == true
             end,
             callback = function()
-                local v = G_reader_settings:readSetting("bookshelf_progress_enabled")
+                local v = G_reader_settings:readSetting(setting_key)
                 if v == nil then v = true end
-                G_reader_settings:saveSetting("bookshelf_progress_enabled", not v)
+                G_reader_settings:saveSetting(setting_key, not v)
                 G_reader_settings:flush()
                 markDirty()
             end,
-            separator = true,
-        },
+            separator = separator,
+        }
+    end
+    return {
+        toggleRow("bookshelf_progress_bookmark_enabled",
+                  _("Show reading bookmarks"), false),
+        toggleRow("bookshelf_progress_bar_enabled",
+                  _("Show progress bars"), false),
+        toggleRow("bookshelf_progress_badge_enabled",
+                  _("Show completed book badge"), true),
         {
             text_func = function()
                 return _("Read color") .. ": " .. valueLabel("fill")
@@ -584,6 +595,77 @@ function Settings:_progressIndicatorsSubItems()
                 G_reader_settings:flush()
                 markDirty()
                 if touchmenu_instance then touchmenu_instance:updateItems() end
+            end,
+        },
+    }
+end
+
+-- ---------------------------------------------------------------------------
+-- Settings (parent) menu
+-- ---------------------------------------------------------------------------
+
+-- Cover-progress + Advanced settings live behind a single "Settings" entry
+-- in the main bookshelf menu. Keeps the top level uncluttered while still
+-- giving each surface its own sub-screen.
+function Settings:_settingsSubItems()
+    return {
+        {
+            text                = _("Cover progress indicators"),
+            sub_item_table_func = function()
+                return self:_progressIndicatorsSubItems()
+            end,
+        },
+        {
+            text                = _("Advanced settings"),
+            sub_item_table_func = function()
+                return self:_advancedSubItems()
+            end,
+        },
+    }
+end
+
+-- Factored out from main.lua so it can be referenced via the new Settings
+-- parent menu. Behaviour is identical to the previous inline definition.
+function Settings:_advancedSubItems()
+    local plugin = self._plugin
+    return {
+        {
+            text     = _("Scan all library metadata"),
+            callback = function(touchmenu_instance)
+                if touchmenu_instance then
+                    UIManager:close(touchmenu_instance)
+                end
+                UIManager:nextTick(function() plugin:scanAllMetadata() end)
+            end,
+        },
+        {
+            text     = _('"Latest" walk depth'),
+            callback = function() self:_pickLatestDepth() end,
+        },
+        {
+            text = _("BETA: Read calibre metadata.calibre"),
+            help_text = _("For users with a Calibre-managed library. "
+                .. "Reads the metadata.calibre JSON file at home_dir to "
+                .. "cover title / authors / series / tags / language for "
+                .. "every book in the library — no per-book extraction "
+                .. "needed. BIM-cached metadata still wins per field; "
+                .. "Calibre data only fills gaps."),
+            checked_func   = function()
+                return G_reader_settings:readSetting("bookshelf_calibre_metadata") == true
+            end,
+            keep_menu_open = true,
+            callback = function()
+                local enabled = G_reader_settings:readSetting("bookshelf_calibre_metadata") == true
+                G_reader_settings:saveSetting("bookshelf_calibre_metadata", not enabled)
+                G_reader_settings:flush()
+                local ok, Repo = pcall(require, "bookshelf_book_repository")
+                if ok and Repo and Repo.invalidateWalkCache then
+                    Repo.invalidateWalkCache()
+                end
+                if self._bw and self._bw._rebuild then
+                    self._bw:_rebuild()
+                    UIManager:setDirty(self._bw, "ui")
+                end
             end,
         },
     }

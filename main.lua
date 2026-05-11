@@ -230,11 +230,11 @@ function Bookshelf:_extendMenuOrder()
     table.insert(order["KOMenu:menu_buttons"], 2, "bookshelf_tab")
     order.bookshelf_tab = {
         "bookshelf_toggle",
+        "bookshelf_status_line",
         "bookshelf_hero_card",
         "bookshelf_shelf_tabs",
-        "bookshelf_progress_indicators",
+        "bookshelf_settings",
         "bookshelf_updates",
-        "bookshelf_advanced",
         "bookshelf_about",
     }
 end
@@ -313,6 +313,15 @@ function Bookshelf:addToMainMenu(menu_items)
         separator = true,
     }
 
+    menu_items.bookshelf_status_line = {
+        text         = _("Status bar line"),
+        enabled_func = function() return outer:_isShowing() end,
+        callback     = function(touchmenu_instance)
+            S._bw = _live_widget
+            S:_editHeroRegion("status", touchmenu_instance)
+        end,
+    }
+
     menu_items.bookshelf_hero_card = {
         text                = _("Edit book detail view"),
         enabled_func        = function() return outer:_isShowing() end,
@@ -332,63 +341,17 @@ function Bookshelf:addToMainMenu(menu_items)
         end,
     }
 
-    menu_items.bookshelf_progress_indicators = {
-        text                = _("Cover progress indicators"),
-        enabled_func        = function() return outer:_isShowing() end,
+    menu_items.bookshelf_settings = {
+        text                = _("Settings"),
         sub_item_table_func = function()
             S._bw = _live_widget
-            return S:_progressIndicatorsSubItems()
+            return S:_settingsSubItems()
         end,
     }
 
     menu_items.bookshelf_updates = {
         text                = _("Updates"),
         sub_item_table_func = function() return S:_updateSubItems() end,
-    }
-
-    menu_items.bookshelf_advanced = {
-        text           = _("Advanced settings"),
-        sub_item_table = {
-            {
-                text     = _("Scan all library metadata"),
-                callback = function(touchmenu_instance)
-                    if touchmenu_instance then
-                        UIManager:close(touchmenu_instance)
-                    end
-                    UIManager:nextTick(function() outer:scanAllMetadata() end)
-                end,
-            },
-            {
-                text     = _('"Latest" walk depth'),
-                callback = function() S:_pickLatestDepth() end,
-            },
-            {
-                text = _("BETA: Read calibre metadata.calibre"),
-                help_text = _("For users with a Calibre-managed library. "
-                    .. "Reads the metadata.calibre JSON file at home_dir to "
-                    .. "cover title / authors / series / tags / language for "
-                    .. "every book in the library — no per-book extraction "
-                    .. "needed. BIM-cached metadata still wins per field; "
-                    .. "Calibre data only fills gaps."),
-                checked_func   = function()
-                    return G_reader_settings:readSetting("bookshelf_calibre_metadata") == true
-                end,
-                keep_menu_open = true,
-                callback = function()
-                    local enabled = G_reader_settings:readSetting("bookshelf_calibre_metadata") == true
-                    G_reader_settings:saveSetting("bookshelf_calibre_metadata", not enabled)
-                    G_reader_settings:flush()
-                    local ok, Repo = pcall(require, "bookshelf_book_repository")
-                    if ok and Repo and Repo.invalidateWalkCache then
-                        Repo.invalidateWalkCache()
-                    end
-                    if S._bw and S._bw._rebuild then
-                        S._bw:_rebuild()
-                        UIManager:setDirty(S._bw, "ui")
-                    end
-                end,
-            },
-        },
     }
 
     menu_items.bookshelf_about = {

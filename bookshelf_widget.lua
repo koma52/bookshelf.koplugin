@@ -2565,24 +2565,25 @@ end
 -- UIManager calls paintTo in the new rotated frame while self.dimen still
 -- holds the old portrait size, placing the bottom of the widget off-screen.
 function BookshelfWidget:paintTo(bb, x, y)
-    -- Skip painting when a transitional widget (one flagged invisible) sits
-    -- on top of us. The motivating case is a seamless ReaderUI reload
-    -- (the terminal step of CRE's partial-rerendering automation after a
-    -- font/style change): ReaderUI:reloadDocument tears down the reader,
-    -- queues an invisible "Opening file..." InfoMessage placeholder, and
-    -- calls UIManager:forceRePaint between the close and the re-show.
-    -- UIManager marks us dirty when the reader is removed, so without this
-    -- guard we'd paint the full shelf into the framebuffer here — and the
-    -- placeholder InfoMessage's refresh callback returns ("ui", movable.dimen)
-    -- with movable.dimen == nil (an invisible InfoMessage never paints),
-    -- which degrades to a full-screen refresh in UIManager:_refresh. Net
-    -- result without the guard: ~1s of full-screen bookshelf flashed between
-    -- the old reader page and the freshly-rerendered one. The same heuristic
-    -- correctly suppresses paint under TrapWidget / ScreensaverLockWidget,
-    -- where preserving the previous framebuffer is the desired behaviour.
+    -- Skip painting when the seamless ReaderUI-reload "Opening file..."
+    -- InfoMessage placeholder is on top of us. That placeholder is
+    -- invisible (readerui.lua:670, invisible = seamless) and its refresh
+    -- callback returns ("ui", self.movable.dimen) with movable.dimen ==
+    -- nil (an invisible InfoMessage never paints, so its movable never
+    -- receives a dimen). UIManager:_refresh treats nil as full-screen,
+    -- so without this guard the entire shelf flashes for ~1s between
+    -- the old reader page and the new ReaderUI repainting over us.
+    --
+    -- The check is narrow: only suppress when the invisible widget has
+    -- a .text field, which is the CRE-reload InfoMessage's signature
+    -- (it carries the localised "Opening file '%1'." string). KOReader
+    -- v2026.03 on PW6 keeps a separate long-lived invisible widget on
+    -- the stack that has no .text -- an earlier broader guard
+    -- (top.invisible alone) suppressed every bookshelf paint on that
+    -- device and left users staring at the FileManager forever. See #23.
     local stack = UIManager._window_stack
     local top = stack and stack[#stack] and stack[#stack].widget
-    if top and top.invisible then return end
+    if top and top.invisible and top.text then return end
 
     local sw = Screen:getWidth()
     local sh = Screen:getHeight()

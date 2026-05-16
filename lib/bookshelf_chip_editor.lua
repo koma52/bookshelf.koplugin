@@ -383,7 +383,26 @@ function Editor:editTab(tab_id, opts)
                         if label_dialog and label_dialog.onCloseKeyboard then
                             pcall(function() label_dialog:onCloseKeyboard() end)
                         end
+                        -- Guard against tap-fall-through. With the keyboard
+                        -- hidden, InputDialog:onTap treats any tap outside
+                        -- the dialog frame as "close the dialog" (see
+                        -- frontend/ui/widget/inputdialog.lua:557-560).
+                        -- Rapid pagination taps on the icon picker can leak
+                        -- through, dismissing the dialog underneath; the
+                        -- picker then has nothing to send its glyph to,
+                        -- leaving the keyboard orphaned on screen after the
+                        -- user's pick (issue #43). Setting
+                        -- deny_keyboard_hiding short-circuits onTap entirely
+                        -- so the dialog can't dismiss itself while the
+                        -- picker is the modal on top. Restored when the
+                        -- picker callback runs.
+                        if label_dialog then
+                            label_dialog.deny_keyboard_hiding = true
+                        end
                         IconsLibrary:show(function(glyph)
+                            if label_dialog then
+                                label_dialog.deny_keyboard_hiding = false
+                            end
                             -- Insert the glyph at cursor in the InputDialog.
                             -- KOReader's InputDialog exposes addTextToInput
                             -- (lifts the bookends_line_editor pattern).

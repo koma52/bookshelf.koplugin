@@ -841,7 +841,14 @@ function Editor:editTab(tab_id, opts)
         return true
     end
     dialog.onCloseWidget = function()
-        UIManager:setDirty(nil, function()
+        -- Repaint the region under the dialog. setDirty(nil, fn) only
+        -- queues an EPDC flush -- it does NOT trigger any widget's
+        -- paintTo, so the stale dialog pixels still sit in the buffer
+        -- and would be sent to e-ink as a ghost. Passing the
+        -- BookshelfWidget below gives UIManager a tree to paint before
+        -- the flush. Falls back to a tree-less flush if bw isn't
+        -- attached (caller didn't pass opts.bw).
+        UIManager:setDirty(bw or nil, function()
             return "ui", frame.dimen
         end)
     end

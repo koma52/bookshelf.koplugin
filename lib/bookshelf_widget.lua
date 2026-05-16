@@ -4117,16 +4117,27 @@ function BookshelfWidget:_openBookMenu(item)
               end) },
             { text = fav_label,
               callback = closing(function()
-                -- KOReader API quirk: removeItem writes the collections
-                -- file to disk automatically; addItem only updates
-                -- in-memory state and relies on a caller-side :write()
-                -- to persist. Without the explicit write, additions are
-                -- lost on the next KOReader restart.
+                -- KOReader API quirks (frontend/readcollection.lua):
+                --   * addItem only updates in-memory state -- needs a
+                --     caller-side :write() to persist.
+                --   * removeItem DOES call :write({ collection_name = true })
+                --     internally (line 189) BUT passes the literal string
+                --     "collection_name" as the table key rather than the
+                --     variable's value. :write at line 76 then checks
+                --     updated_collections[coll_name] (e.g. "favorites"),
+                --     finds nil, and skips persisting the affected
+                --     collection. In-memory state updates correctly, but
+                --     the on-disk file stays stale -- so removed
+                --     favourites come back on the next KOReader restart.
+                -- Workaround: explicit :write({ favorites = true }) on
+                -- both branches, with the right key, so removal actually
+                -- persists.
                 local ok, already = pcall(function()
                     return ReadCollection:isFileInCollection(book.filepath, "favorites")
                 end)
                 if ok and already then
                     ReadCollection:removeItem(book.filepath, "favorites")
+                    ReadCollection:write({ favorites = true })
                 else
                     ReadCollection:addItem(book.filepath, "favorites")
                     ReadCollection:write({ favorites = true })

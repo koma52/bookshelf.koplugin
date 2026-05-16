@@ -86,12 +86,23 @@ end
 -- Memoized surname / given lookup. Caches on the record so a sort over
 -- 3000 books does 3000 parses, not ~35000 (one per comparison pair).
 --
--- Fallback chain:
---   b.author / b.authors      -- BIM or Calibre author metadata
---   b.author_surname          -- pre-parsed surname (rarely set)
---   b.series_name             -- group shape (Authors / Genres tab)
---   b.name                    -- lfs entry (Home folder cards, where the
---                                folder name IS the author identifier)
+-- Source order:
+--   1. b.author_sort           -- Calibre-curated sort form. "Surname,
+--                                 Forename" (single) or "Surname1, F1 &
+--                                 Surname2, F2" (multi). Honours user
+--                                 edits to particles ("St. Crowe", "van
+--                                 der"), suffixes, inverted-naming
+--                                 cultures, etc. Strictly the right
+--                                 answer when present.
+--   2. b.author / b.authors    -- BIM or Calibre author metadata --
+--                                 surnameOf parses the last token as the
+--                                 surname; falls down on the cases
+--                                 author_sort covers, but it's all we
+--                                 have for non-Calibre libraries.
+--   3. b.author_surname        -- pre-parsed surname (rarely set)
+--   4. b.series_name           -- group shape (Authors / Genres tab)
+--   5. b.name                  -- lfs entry (Home folder cards, where the
+--                                 folder name IS the author identifier)
 --
 -- Parent-folder name is NOT a fallback for book files: the flat library
 -- view should respect BIM/Calibre author metadata only, not synthesise
@@ -99,6 +110,17 @@ end
 -- is the honest signal.
 local function cachedSurname(b)
     if b._surname_cache ~= nil then return b._surname_cache end
+    -- Prefer Calibre's curated author_sort over derived surname.
+    if type(b.author_sort) == "string" and b.author_sort ~= "" then
+        -- "Surname1, F1 & Surname2, F2" -> first author -> surname.
+        local first = b.author_sort:match("^([^&]+)") or b.author_sort
+        local surname = first:match("^([^,]+)") or first
+        surname = surname:gsub("^%s+", ""):gsub("%s+$", "")
+        if surname ~= "" then
+            b._surname_cache = surname:lower()
+            return b._surname_cache
+        end
+    end
     local raw = b.author or b.authors or b.author_surname
              or b.series_name or b.name or ""
     if type(raw) ~= "string" then raw = "" end

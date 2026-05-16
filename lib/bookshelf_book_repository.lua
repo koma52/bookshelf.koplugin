@@ -392,6 +392,14 @@ function Repo.buildBookMeta(filepath)
         title       = title,
         author      = authors and authors[1] or nil,
         authors     = authors,
+        -- Calibre-curated sort form ("Surname, Forename" or
+        -- "Surname1, F1 & Surname2, F2"). The sort engine prefers this
+        -- over a derived surname so user-edited author_sort values
+        -- (compound surnames "St. Crowe", particles "van der", suffix
+        -- handling, inverted naming) are honoured. nil for non-Calibre
+        -- libraries; cachedSurname falls back to parsing `author` then.
+        author_sort = cb and type(cb.author_sort) == "string"
+                       and cb.author_sort ~= "" and cb.author_sort or nil,
         genres      = genres,
         -- `series` is the raw "Foundation #1" string used by some
         -- consumers; reconstruct it from Calibre fields when needed.
@@ -489,6 +497,13 @@ local function _buildLightMetaFromInfo(fp, info)
         series_num  = series_num,
         author      = authors and authors[1] or nil,
         authors     = authors,
+        -- See buildBookMeta: Calibre-curated sort form, consumed by
+        -- cachedSurname in the sort engine. Light meta carries it too
+        -- so the predicate-walk path (loadCandidatesByPredicate) gets
+        -- correct surname ordering on custom chips, not just the heavy
+        -- buildBookMeta path.
+        author_sort = cb and type(cb.author_sort) == "string"
+                       and cb.author_sort ~= "" and cb.author_sort or nil,
         genres      = genres,
         title       = title,
     }

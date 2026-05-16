@@ -32,36 +32,54 @@ local LEGACY_KEY  = "chips_disabled"
 -- DEFAULTS() is a function (not a table constant) because the labels go through
 -- gettext — calling it at module load would freeze them to whatever locale was
 -- active at first require. As a function the labels resolve at call time.
+-- Default chip set for fresh installs. Home / Recent / Series / Favourites
+-- are enabled so a new user sees a focused starting bar with the four
+-- main browsing modes (everything / currently reading / by series /
+-- curated). Latest / Authors / Genres / Tags are present but disabled,
+-- visible in the Bookshelf chips menu so the user can opt them on when
+-- they're ready. Upgrading users keep whatever they had via migrate()
+-- below -- the enabled flags here only affect first-launch installs.
 function TabModel.DEFAULTS()
     return {
         { id = "all",       label = tr("Home"),       source = { kind = "all"       },
-          filter = {}, sort_priority = { { key = "filename",    reverse = false } }, enabled = true },
+          filter = {}, sort_priority = { { key = "filename",    reverse = false } }, enabled = true  },
         { id = "recent",    label = tr("Recent"),     source = { kind = "recent"    },
-          filter = {}, sort_priority = { { key = "last_opened", reverse = true  } }, enabled = true },
+          filter = {}, sort_priority = { { key = "last_opened", reverse = true  } }, enabled = true  },
         { id = "latest",    label = tr("Latest"),     source = { kind = "latest"    },
-          filter = {}, sort_priority = { { key = "date_added",  reverse = true  } }, enabled = true },
+          filter = {}, sort_priority = { { key = "date_added",  reverse = true  } }, enabled = false },
         { id = "series",    label = tr("Series"),     source = { kind = "series"    },
-          filter = {}, sort_priority = { { key = "series_name", reverse = false } }, enabled = true },
+          filter = {}, sort_priority = { { key = "series_name", reverse = false } }, enabled = true  },
         { id = "authors",   label = tr("Authors"),    source = { kind = "authors"   },
-          filter = {}, sort_priority = { { key = "author_surname", reverse = false } }, enabled = true },
+          filter = {}, sort_priority = { { key = "author_surname", reverse = false } }, enabled = false },
         { id = "genres",    label = tr("Genres"),     source = { kind = "genres"    },
-          filter = {}, sort_priority = { { key = "book_count",  reverse = true  } }, enabled = true },
+          filter = {}, sort_priority = { { key = "book_count",  reverse = true  } }, enabled = false },
         { id = "tags",      label = tr("Tags"),       source = { kind = "tags"      },
-          filter = {}, sort_priority = { { key = "book_count",  reverse = true  } }, enabled = true },
+          filter = {}, sort_priority = { { key = "book_count",  reverse = true  } }, enabled = false },
         { id = "favorites", label = tr("Favourites"), source = { kind = "favorites" },
-          filter = {}, sort_priority = { { key = "date_added",  reverse = true  } }, enabled = true },
+          filter = {}, sort_priority = { { key = "date_added",  reverse = true  } }, enabled = true  },
     }
 end
 
 -- migrate(): if the legacy disabled-set exists, apply it to a fresh defaults
 -- snapshot, save the result, and clear the legacy key. Returns the migrated
 -- tabs. No-op if no legacy state present.
+--
+-- v1 had every built-in chip enabled by default. v2 trims the fresh-install
+-- defaults (Latest / Authors / Genres / Tags are disabled out of the box),
+-- so an upgrader who never touched chips_disabled would otherwise lose
+-- those four chips on their first v2 launch. Explicitly set enabled=true
+-- for any tab NOT in the legacy disabled-set so upgraders keep their v1
+-- chip layout exactly.
 local function migrate()
     local legacy = BookshelfSettings.read(LEGACY_KEY)
     if type(legacy) ~= "table" then return nil end
     local tabs = TabModel.DEFAULTS()
     for _, t in ipairs(tabs) do
-        if legacy[t.id] then t.enabled = false end
+        if legacy[t.id] then
+            t.enabled = false
+        else
+            t.enabled = true   -- v1 had all chips enabled; preserve that
+        end
     end
     BookshelfSettings.save(STORAGE_KEY, tabs)
     BookshelfSettings.delete(LEGACY_KEY)

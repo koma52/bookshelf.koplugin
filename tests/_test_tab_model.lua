@@ -54,6 +54,26 @@ test("defaults: produces all built-in tabs in expected order", function()
     end
 end)
 
+test("defaults: fresh install enables Home/Recent/Series/Favourites only", function()
+    -- v2.0.1: trimmed default chip set so new users see a focused
+    -- starting bar instead of all 8 chips at once. Latest/Authors/
+    -- Genres/Tags exist but are disabled; user can opt them on via
+    -- the Bookshelf chips menu.
+    local enabled_by_default = {}
+    for _, t in ipairs(TabModel.DEFAULTS()) do
+        if t.enabled then enabled_by_default[t.id] = true end
+    end
+    local expected = { all = true, recent = true, series = true, favorites = true }
+    for id in pairs(expected) do
+        assert(enabled_by_default[id],
+               "expected " .. id .. " to be enabled in fresh-install defaults")
+    end
+    for id in pairs(enabled_by_default) do
+        assert(expected[id],
+               "did not expect " .. id .. " enabled in fresh-install defaults")
+    end
+end)
+
 test("load: returns defaults when nothing saved", function()
     local tabs = TabModel.load()
     assert(#tabs > 0)

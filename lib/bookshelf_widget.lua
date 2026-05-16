@@ -47,7 +47,13 @@ end
 -- captures it lexically) -- Lua parses method bodies in the order they
 -- appear, so a local declared further down would be invisible up here
 -- and the references would silently rebind to the (nil) global.
-local MIN_HERO_SHARE = 0.30
+--
+-- Set to 0.25 (was 0.30 in early v2.0.0): the 30% floor was tight
+-- enough to drop Pixel-aspect tall screens (1080x2400 ~ 29% hero at
+-- n=3) from their natural 3 rows to 2, which users on Pixel 6/8
+-- treated as a regression. 0.25 keeps those devices at 3x3 while
+-- still triggering Boox Palma (~20% at n=3) to drop to 2 rows.
+local MIN_HERO_SHARE = 0.25
 
 -- ─── BookshelfWidget ──────────────────────────────────────────────────────────
 

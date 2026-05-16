@@ -662,6 +662,54 @@ function Settings:_advancedSubItems()
             end,
         },
         {
+            text     = _("Reset chip bar to defaults"),
+            help_text = _("Clears your custom chip layout (which chips are "
+                .. "shown, their order, their labels and icons, their "
+                .. "sources and filters and sorts) and restores the "
+                .. "fresh-install chip set: Home / Recent / Series / "
+                .. "Favourites enabled, the rest available to toggle on. "
+                .. "Also returns the active chip to Home and the page "
+                .. "indicator to 1. Other settings (hero text, fonts, "
+                .. "colours) are unaffected."),
+            callback = function(touchmenu_instance)
+                local ConfirmBox = require("ui/widget/confirmbox")
+                UIManager:show(ConfirmBox:new{
+                    text = _("Reset the chip bar to default settings?\n\n"
+                        .. "All custom chips you have created or edited "
+                        .. "will be lost. Other Bookshelf settings (hero "
+                        .. "text, fonts, colours) are unaffected."),
+                    ok_text = _("Reset"),
+                    ok_callback = function()
+                        BookshelfSettings.delete("tabs")
+                        -- The active chip / cursor / page might point at a
+                        -- custom chip ID that no longer exists after reset.
+                        -- Drop them so the next render starts cleanly on
+                        -- Home (the default).
+                        BookshelfSettings.save("active_chip",   "all")
+                        BookshelfSettings.save("active_cursor", 1)
+                        BookshelfSettings.save("active_page",   1)
+                        BookshelfSettings.flush()
+                        if touchmenu_instance then
+                            UIManager:close(touchmenu_instance)
+                        end
+                        -- Rebuild the live bookshelf so the new chip
+                        -- layout paints immediately (also clears any
+                        -- in-memory state from the chip bar widget).
+                        if self._bw and self._bw._rebuild then
+                            self._bw.chip    = "all"
+                            self._bw._cursor = 1
+                            if self._bw._syncPageFromCursor then
+                                self._bw:_syncPageFromCursor()
+                            end
+                            self._bw._drilldown_path = {}
+                            self._bw:_rebuild()
+                            UIManager:setDirty(self._bw, "ui")
+                        end
+                    end,
+                })
+            end,
+        },
+        {
             text = _("BETA: Read calibre metadata.calibre"),
             help_text = _("For users with a Calibre-managed library. "
                 .. "Reads the metadata.calibre JSON file at home_dir to "

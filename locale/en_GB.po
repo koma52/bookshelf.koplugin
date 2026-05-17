@@ -516,14 +516,12 @@ msgstr ""
 
 #: lib/bookshelf_settings.lua:128
 msgid ""
-"Tokens are placeholders that get replaced with live data when the book "
-"detail view or status line renders.\n"
+"Tokens are placeholders that get replaced with live data when the book detail view or status line renders.\n"
 "\n"
 "  %title — %book_pct\n"
 "  → Dune — 36%\n"
 "\n"
-"Wrap content in [if:foo]…[/if] to show it only when the token has a value. "
-"Add [else]…[/if] for a fallback.\n"
+"Wrap content in [if:foo]…[/if] to show it only when the token has a value. Add [else]…[/if] for a fallback.\n"
 "\n"
 "  [if:series]Book %series_num of %series_name[/if]\n"
 "  [if:batt<20]LOW %batt[/if]"
@@ -621,9 +619,9 @@ msgstr ""
 msgid ""
 "Show a 'Closing book…' message in the centre of the screen while a book is "
 "being closed back to Bookshelf. The book-close work takes a moment, so the "
-"message confirms your gesture landed during the wait. Some users on colour e-"
-"ink panels see a brief flash from the message appearing. Turn it off here if "
-"you prefer no message and no flash."
+"message confirms your gesture landed during the wait. Some users on colour "
+"e-ink panels see a brief flash from the message appearing. Turn it off here "
+"if you prefer no message and no flash."
 msgstr ""
 
 #: lib/bookshelf_settings.lua:665
@@ -644,8 +642,7 @@ msgstr ""
 msgid ""
 "Reset the chip bar to default settings?\n"
 "\n"
-"All custom chips you have created or edited will be lost. Other Bookshelf "
-"settings (hero text, fonts, colours) are unaffected."
+"All custom chips you have created or edited will be lost. Other Bookshelf settings (hero text, fonts, colours) are unaffected."
 msgstr ""
 
 #: lib/bookshelf_settings.lua:681 main.lua:1112
@@ -729,8 +726,8 @@ msgstr ""
 
 #: lib/bookshelf_settings.lua:1262
 msgid ""
-"Off: every chip gets the same width. On: each chip is sized to its label, so "
-"single-icon chips stay narrow and longer text labels get more room. Falls "
+"Off: every chip gets the same width. On: each chip is sized to its label, so"
+" single-icon chips stay narrow and longer text labels get more room. Falls "
 "back to equal widths when natural sizes don't fit."
 msgstr ""
 
@@ -845,8 +842,8 @@ msgstr ""
 
 #: lib/bookshelf_widget.lua:1093
 msgid ""
-"No genres yet · Add keywords or subject metadata to your books and they will "
-"appear here"
+"No genres yet · Add keywords or subject metadata to your books and they will"
+" appear here"
 msgstr ""
 
 #: lib/bookshelf_widget.lua:1095
@@ -1110,8 +1107,8 @@ msgstr ""
 
 #: main.lua:1111
 msgid ""
-"This will clear the development branch setting and install the latest stable "
-"release of Bookshelf, then restart KOReader. Continue?"
+"This will clear the development branch setting and install the latest stable"
+" release of Bookshelf, then restart KOReader. Continue?"
 msgstr ""
 
 #: main.lua:1133

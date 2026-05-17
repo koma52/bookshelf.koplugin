@@ -665,9 +665,20 @@ end
 -- every filesystem-level change cheaply, so a timer would only ever
 -- invalidate a cache that already represents reality. The constant stays
 -- defined because downstream cache structs still store `expires_at` for
--- legacy reasons (no longer checked for the walk-derived caches).
+-- legacy reasons -- and _all_cache, _light_meta_cache, the per-group
+-- caches (_series/_authors/_genres/_formats/_ratings) and _bySource_cache
+-- ALL still consult `expires_at > now` in their HIT paths. The walk cache
+-- itself uses dir-mtime invalidation and ignores TTL, but the rest don't.
 -- User-driven refresh via the swipe-down gesture invalidates explicitly.
-local WALK_CACHE_TTL = 0  -- unused; kept so old struct shapes still init
+--
+-- Was 0 for a long stretch; that left every dependent cache permanently
+-- expired at the moment of write (now > now is false) so the HIT check
+-- always failed. The perf instrumentation trace from 06:08 on 2026-05-17
+-- showed every chip switch / paginate / toggle paying the full uncached
+-- cost (~1500ms on a 329-item library). Bumping to a day-length TTL
+-- restores the intended session-long caching while invalidateWalkCache
+-- and cachedWalk's files-changed branch still drive correctness.
+local WALK_CACHE_TTL = 24 * 3600  -- 1 day; effectively "session length"
 local _walk_cache = {}      -- { [key] = { list = {...}, expires_at = number } }
 
 -- Series-groups cache. The walk-cache covers the lfs.dir + per-file mtime

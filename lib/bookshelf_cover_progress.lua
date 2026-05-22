@@ -137,6 +137,32 @@ local Widget         = require("ui/widget/widget")
 local Geom           = require("ui/geometry")
 local _BlitbufferBar = require("ffi/blitbuffer")
 local _ScreenBar     = require("device").screen
+local ffi            = require("ffi")
+local ColorRGB32_t   = ffi.typeof("ColorRGB32")
+
+-- Blitbuffer's plain paintRoundedRect / paintBorder flatten their colour
+-- argument to luminance via getColor8() before painting, so a ColorRGB32
+-- like red goes down as its grey luminance on a colour buffer. KOReader
+-- exposes parallel *RGB32 variants that preserve true colour; dispatch by
+-- type so the call sites stay shape-agnostic. (Same pattern bookends uses
+-- in bookends_overlay_widget.lua.)
+local function _paintRoundedRect(bb, x, y, w, h, c, r)
+    if not c then return end
+    if ffi.istype(ColorRGB32_t, c) then
+        bb:paintRoundedRectRGB32(x, y, w, h, c, r)
+    else
+        bb:paintRoundedRect(x, y, w, h, c, r)
+    end
+end
+
+local function _paintBorder(bb, x, y, w, h, bw, c, r)
+    if not c then return end
+    if ffi.istype(ColorRGB32_t, c) then
+        bb:paintBorderRGB32(x, y, w, h, bw, c, r)
+    else
+        bb:paintBorder(x, y, w, h, bw, c, r)
+    end
+end
 
 local ProgressBarWidget = Widget:extend{
     width  = 0,
@@ -159,11 +185,9 @@ function ProgressBarWidget:paintTo(bb, x, y)
     local border = math.max(1, _ScreenBar:scaleBySize(1))
     local radius = math.floor(h / 2)
     -- 1. Track background (rounded rect, full bar)
-    if self.track then
-        bb:paintRoundedRect(x, y, w, h, self.track, radius)
-    end
+    _paintRoundedRect(bb, x, y, w, h, self.track, radius)
     -- 2. Dark border outlining the track
-    bb:paintBorder(x, y, w, h, border, _BlitbufferBar.COLOR_BLACK, radius)
+    _paintBorder(bb, x, y, w, h, border, _BlitbufferBar.COLOR_BLACK, radius)
     -- 3. Inner fill (rounded), inset by border + padding, width scales with pct
     local clamped = self.pct
     if clamped < 0 then clamped = 0 end
@@ -177,7 +201,7 @@ function ProgressBarWidget:paintTo(bb, x, y)
     local inner_w = math.floor(inner_max_w * clamped + 0.5)
     if inner_w < 1 then return end
     local inner_r = math.max(0, radius - inset)
-    bb:paintRoundedRect(x + inset, y + inset, inner_w, inner_h, self.fill, inner_r)
+    _paintRoundedRect(bb, x + inset, y + inset, inner_w, inner_h, self.fill, inner_r)
 end
 
 -- Build a ProgressBarWidget. `fill` and `track` are Blitbuffer colour

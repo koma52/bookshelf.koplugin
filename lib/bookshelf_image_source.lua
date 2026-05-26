@@ -42,11 +42,16 @@ local LIBRARY_EXTS = { "jpg", "jpeg", "png", "gif", "bmp", "webp", "tiff", "tif"
 
 -- Per-kind subfolder names under the image library root. Plural because
 -- the library reads like a content directory (authors/, series/, ...).
+-- "collections" rather than "tags" so the image-library subfolder name
+-- matches the user-facing UI label ("Set collection image…", "Manage
+-- collections", the Collections chip) -- bookshelf's internal kind name
+-- "tag" comes from KOReader's ReadCollection history; users only see
+-- "collection".
 local STACK_SUBDIRS = {
     author = "authors",
     series = "series",
     genre  = "genres",
-    tag    = "tags",
+    tag    = "collections",
 }
 
 -- Stack identity key used in the user-override table. Concatenating

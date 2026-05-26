@@ -966,23 +966,6 @@ function Settings:_settingsSubItems()
             end,
         },
         {
-            text_func = function()
-                local ImageSource = require("lib/bookshelf_image_source")
-                local p = ImageSource.getImageLibraryPath()
-                local short = p
-                if type(p) == "string" then
-                    -- Show just the last two segments so the row
-                    -- doesn't truncate; settings menus are narrow.
-                    short = p:match("([^/]+/[^/]+/?)$") or p
-                end
-                return _("Image library") .. ": " .. (short or _("(none)"))
-            end,
-            keep_menu_open = true,
-            callback = function(touchmenu_instance)
-                self:_pickImageLibraryPath(touchmenu_instance)
-            end,
-        },
-        {
             text                = _("Advanced settings"),
             sub_item_table_func = function()
                 return self:_advancedSubItems()
@@ -1130,6 +1113,24 @@ function Settings:_advancedSubItems()
         {
             text     = _('"Latest" walk depth'),
             callback = function() self:_pickLatestDepth() end,
+        },
+        {
+            text_func = function()
+                local ImageSource = require("lib/bookshelf_image_source")
+                local p = ImageSource.getImageLibraryPath()
+                local short = p
+                if type(p) == "string" then
+                    -- Show just the last two segments so the row
+                    -- doesn't truncate; settings menus are narrow.
+                    short = p:match("([^/]+/[^/]+/?)$") or p
+                end
+                return _("Image library") .. ": " .. (short or _("(none)"))
+            end,
+            keep_menu_open = true,
+            help_text = _("Where Bookshelf looks for custom cover images. For stacks, place files like authors/author-name.jpg into the matching subfolder (authors, series, genres, collections). For folders, drop a cover.jpg into the folder itself. See the README for more matching options."),
+            callback = function(touchmenu_instance)
+                self:_pickImageLibraryPath(touchmenu_instance)
+            end,
         },
         {
             text = _("Double tap to open books"),

@@ -303,7 +303,7 @@ function BookshelfWidget:init()
     local _diag_init_t_pre_rebuild = _gettime()
     self:_rebuild()
     self:_startStatusTimer()
-    logger.info(string.format(
+    logger.dbg(string.format(
         "[bookshelf perf] BookshelfWidget:init: pre_rebuild=%.0fms"
         .. " rebuild+timer=%.0fms TOTAL=%.0fms chip=%s",
         (_diag_init_t_pre_rebuild - _diag_init_t0) * 1000,
@@ -1678,7 +1678,7 @@ function BookshelfWidget:_rebuild()
     local _perf_t4 = _gettime()
     logger.dbg(string.format("[bookshelf perf] _rebuild: assemble=%.0fms",
         (_perf_t4 - _perf_t3) * 1000))
-    logger.info(string.format(
+    logger.dbg(string.format(
         "[bookshelf perf] _rebuild: TOTAL=%.0fms chip=%s page=%d/%d items=%d"
         .. " (hero=%.0f fetch=%.0f shelves=%.0f assemble=%.0f)",
         (_perf_t4 - _perf_t0) * 1000, _perf_chip, _perf_page, total_pages, total,
@@ -1787,7 +1787,7 @@ function BookshelfWidget:_kickOffMissingMetaExtraction(items, slot_w, slot_h, he
         elseif info.has_cover ~= "Y" then
             reason = (inprog >= max_tries) and "no-cover-given-up" or "no-cover-fetched"
         end
-        logger.info(string.format(
+        logger.dbg(string.format(
             "[bim queue] fp=%s queue=%s reason=%s in_progress=%d has_meta=%s has_cover=%s cover_fetched=%s",
             fp, tostring(needs), reason, inprog,
             tostring(info and info.has_meta), tostring(info and info.has_cover),
@@ -1834,7 +1834,7 @@ function BookshelfWidget:_kickOffMissingMetaExtraction(items, slot_w, slot_h, he
     if hero_fp then maybe_queue(hero_fp) end
     logger.dbg(string.format("[bookshelf perf] _kickOffMeta: queued=%d displayed=%d",
         #files, #(items or {})))
-    logger.info(string.format(
+    logger.dbg(string.format(
         "[bim kickoff] queued=%d displayed=%d bim_busy=%s",
         #files, #(items or {}),
         tostring(BIM:isExtractingInBackground())))
@@ -1867,7 +1867,7 @@ function BookshelfWidget:_kickOffMissingMetaExtraction(items, slot_w, slot_h, he
             local bim_busy = BIM:isExtractingInBackground()
             if bim_busy then
                 if not self._bim_owned_extraction then
-                    logger.info(string.format(
+                    logger.dbg(string.format(
                         "[bim extract] SKIP files=%d (BIM busy, not owned)",
                         #files))
                     return
@@ -1878,7 +1878,7 @@ function BookshelfWidget:_kickOffMissingMetaExtraction(items, slot_w, slot_h, he
                 -- subjectively felt worse than just waiting for the
                 -- text-only pass to finish.
                 if not self._bim_owned_has_covers then
-                    logger.info(string.format(
+                    logger.dbg(string.format(
                         "[bim extract] SKIP files=%d (owned text-only batch)",
                         #files))
                     return
@@ -1897,7 +1897,7 @@ function BookshelfWidget:_kickOffMissingMetaExtraction(items, slot_w, slot_h, he
                         end
                     end
                     if all_in_queue then
-                        logger.info(string.format(
+                        logger.dbg(string.format(
                             "[bim extract] SKIP files=%d (all already in BIM queue)",
                             #files))
                         return
@@ -1929,7 +1929,7 @@ function BookshelfWidget:_fireBimExtraction(files, label)
         if f.cover_specs then has_covers = true end
         submitted[f.filepath] = true
     end
-    logger.info(string.format(
+    logger.dbg(string.format(
         "[bim extract] FIRE files=%d label=%s covers=%s",
         #files, label or "?", tostring(has_covers)))
     local ok, err = pcall(function() BIM:extractInBackground(files) end)
@@ -1999,7 +1999,7 @@ function BookshelfWidget:_armExtractionPoll(pending_files)
     self._bim_poll_files        = existing
     self._bim_poll_started_at   = os.time()  -- reset budget on every arm
     self._bim_poll_empty_streak = 0          -- and the burst-poll cadence
-    logger.info(string.format(
+    logger.dbg(string.format(
         "[bim arm] watching %d files (added %d)", #existing, added))
     self:_scheduleExtractionPoll()
 end
@@ -2008,7 +2008,7 @@ function BookshelfWidget:_scheduleExtractionPoll()
     if not self._bim_poll_files then return end
     local elapsed = os.time() - (self._bim_poll_started_at or os.time())
     if elapsed >= BIM_POLL_TOTAL_BUDGET_S then
-        logger.info(string.format(
+        logger.dbg(string.format(
             "[bim sched] budget exhausted elapsed=%ds pending=%d -- giving up",
             elapsed, #(self._bim_poll_files or {})))
         self._bim_poll_files = nil
@@ -2017,7 +2017,7 @@ function BookshelfWidget:_scheduleExtractionPoll()
     local streak   = self._bim_poll_empty_streak or 0
     local idx      = math.min(streak + 1, #BIM_POLL_INTERVALS_S)
     local interval = BIM_POLL_INTERVALS_S[idx]
-    logger.info(string.format(
+    logger.dbg(string.format(
         "[bim sched] next=%.1fs streak=%d elapsed=%ds pending=%d",
         interval, streak, elapsed, #(self._bim_poll_files or {})))
     self._bim_poll_fn = function() self:_pollExtraction() end
@@ -2082,7 +2082,7 @@ function BookshelfWidget:_pollExtraction()
             still_pending[#still_pending + 1] = f
             outcome = "PENDING"
         end
-        logger.info(string.format(
+        logger.dbg(string.format(
             "[bim poll] %s fp=%s in_progress=%d has_meta=%s has_cover=%s cover_fetched=%s cover_ready=%s",
             outcome, f.filepath, inprog,
             tostring(info and info.has_meta), tostring(info and info.has_cover),
@@ -2091,7 +2091,7 @@ function BookshelfWidget:_pollExtraction()
     local ready_count = 0
     for _k in pairs(ready_paths) do ready_count = ready_count + 1 end
     local bim_busy_now = BIM:isExtractingInBackground()
-    logger.info(string.format(
+    logger.dbg(string.format(
         "[bim poll] SUMMARY ready=%d pending=%d gave_up=%d bim_busy=%s",
         ready_count, #still_pending, gave_up_count, tostring(bim_busy_now)))
     self._bim_poll_files = #still_pending > 0 and still_pending or nil
@@ -2114,7 +2114,7 @@ function BookshelfWidget:_pollExtraction()
         local fire_list = still_pending
         UIManager:nextTick(function()
             if BIM:isExtractingInBackground() then
-                logger.info(string.format(
+                logger.dbg(string.format(
                     "[bim retry] SKIP files=%d (BIM busy at fire time)",
                     #fire_list))
                 return
@@ -3235,7 +3235,7 @@ function BookshelfWidget:_jumpToLetterPrefix(prefix)
     end
     local _t_fetch = _gettime()
     if not items or #items == 0 then
-        logger.info(string.format(
+        logger.dbg(string.format(
             "[bookshelf jump] chip=%s sort_key=%s via=%s items=0 fetch=%.0fms",
             tostring(self.chip), tostring(sort_key), tostring(fetched_via),
             (_t_fetch - _t0) * 1000))
@@ -3248,7 +3248,7 @@ function BookshelfWidget:_jumpToLetterPrefix(prefix)
         for i = 1, math.min(5, #items) do
             sample[i] = string.format("%q", SortEngine.sortKeyValue(items[i], sort_key) or "?")
         end
-        logger.info(string.format(
+        logger.dbg(string.format(
             "[bookshelf jump] chip=%s sort_key=%s via=%s items=%d fetch=%.0fms head=[%s]",
             tostring(self.chip), tostring(sort_key), tostring(fetched_via),
             #items, (_t_fetch - _t0) * 1000, table.concat(sample, ", ")))
@@ -3265,14 +3265,14 @@ function BookshelfWidget:_jumpToLetterPrefix(prefix)
             self:_clampCursor()
             self:_syncPageFromCursor()
             self:_swapShelvesInPlace()
-            logger.info(string.format(
+            logger.dbg(string.format(
                 "[bookshelf jump] matched %q at idx=%d (page0=%d) scan=%.0fms total=%.0fms",
                 v, i, page0, (_gettime() - _t_fetch) * 1000,
                 (_gettime() - _t0) * 1000))
             return
         end
     end
-    logger.info(string.format(
+    logger.dbg(string.format(
         "[bookshelf jump] NO MATCH for %q scan=%.0fms total=%.0fms",
         p, (_gettime() - _t_fetch) * 1000, (_gettime() - _t0) * 1000))
     UIManager:show(InfoMessage:new{
@@ -3382,7 +3382,7 @@ function BookshelfWidget:_swapShelvesInPlace()
     local all_items, _total_hint = self:_fetchChipItems(MAX_FETCH)
     all_items = all_items or {}
     local _perf_t1 = _gettime()
-    logger.info(string.format("[bookshelf perf] _swapShelves: fetch=%.0fms items=%d chip=%s",
+    logger.dbg(string.format("[bookshelf perf] _swapShelves: fetch=%.0fms items=%d chip=%s",
         (_perf_t1 - _perf_t0) * 1000, _total_hint or #all_items, self.chip))
     local total = _total_hint or #all_items
     local total_pages
@@ -3421,7 +3421,7 @@ function BookshelfWidget:_swapShelvesInPlace()
     local rows = self:_buildShelfRows(items, d.content_w, d.shelf_h, d.PAD, 2)
     local row_top, row_bottom = rows[1], rows[2]
     local _perf_t2 = _gettime()
-    logger.info(string.format("[bookshelf perf] _swapShelves: shelves=%.0fms",
+    logger.dbg(string.format("[bookshelf perf] _swapShelves: shelves=%.0fms",
         (_perf_t2 - _perf_t1) * 1000))
     -- Rebuild the entire footer row (chev nav + optional bucket+✕),
     -- wrapped in its screen-anchor BottomContainer. Swap it into the
@@ -3462,7 +3462,7 @@ function BookshelfWidget:_swapShelvesInPlace()
             if w and w.free then pcall(function() w:free() end) end
         end
     end)
-    logger.info(string.format("[bookshelf perf] _swapShelves: TOTAL=%.0fms page=%d/%d items=%d chip=%s",
+    logger.dbg(string.format("[bookshelf perf] _swapShelves: TOTAL=%.0fms page=%d/%d items=%d chip=%s",
         (_gettime() - _perf_t0) * 1000, self.page, self._total_pages or 0,
         self._total_items or 0, self.chip))
     UIManager:setDirty(self, "ui")
@@ -3583,7 +3583,7 @@ function BookshelfWidget:_repaintSelectionHighlight(old_fp, new_fp)
     -- highlight. (Happens when preview was set on a different page before
     -- the user paginated.)
     if replaced == 0 then
-        logger.info("[bookshelf perf] _repaintHighlight: no slot match -> fallback _swapShelves")
+        logger.dbg("[bookshelf perf] _repaintHighlight: no slot match -> fallback _swapShelves")
         self:_swapShelvesInPlace()
         return
     end
@@ -3883,7 +3883,7 @@ function BookshelfWidget:_previewBook(book, tap_t)
     -- — first tap marks the spine with the thicker border, second tap
     -- on the same spine commits.
     if self._preview_book and self._preview_book.filepath == book.filepath then
-        logger.info(string.format(
+        logger.dbg(string.format(
             "[bookshelf perf] _previewBook: branch=open-same tap_gap=%.0fms",
             _perf_gap_ms))
         self:_openBook(book)
@@ -3930,7 +3930,7 @@ function BookshelfWidget:_previewBook(book, tap_t)
     if was_diff ~= is_diff then
         self:_rebuild()
         UIManager:setDirty(self, "ui")
-        logger.info(string.format(
+        logger.dbg(string.format(
             "[bookshelf perf] _previewBook: branch=rebuild tap_gap=%.0fms TOTAL=%.0fms",
             _perf_gap_ms, (_gettime() - _perf_t0) * 1000))
         return
@@ -3950,7 +3950,7 @@ function BookshelfWidget:_previewBook(book, tap_t)
                 prior_preview_fp, self._preview_book.filepath)
         end
         local _perf_t_end = _gettime()
-        logger.info(string.format(
+        logger.dbg(string.format(
             "[bookshelf perf] _previewBook: branch=swap tap_gap=%.0fms"
             .. " hero=%.0fms shelves=%.0fms TOTAL=%.0fms",
             _perf_gap_ms,
@@ -3963,7 +3963,7 @@ function BookshelfWidget:_previewBook(book, tap_t)
     -- Cold path: no live tree to swap into yet. Full rebuild.
     self:_rebuild()
     UIManager:setDirty(self, "ui")
-    logger.info(string.format(
+    logger.dbg(string.format(
         "[bookshelf perf] _previewBook: branch=cold-rebuild tap_gap=%.0fms TOTAL=%.0fms",
         _perf_gap_ms, (_gettime() - _perf_t0) * 1000))
 end
@@ -4924,7 +4924,7 @@ function BookshelfWidget:_setActiveChip(key)
     BookshelfSettings.save("active_chip", key)
     self:_rebuild()
     UIManager:setDirty(self, "ui")
-    logger.info(string.format(
+    logger.dbg(string.format(
         "[bookshelf perf] chip-switch: from=%s to=%s flash=%.0fms rebuild=%.0fms TOTAL=%.0fms",
         _diag_from, key,
         (_diag_t_flash - _diag_t0) * 1000,
@@ -5029,7 +5029,7 @@ function BookshelfWidget:paintTo(bb, x, y)
         self._diag_first_paint_done = true
         local _diag_paint_t0 = _gettime()
         InputContainer.paintTo(self, bb, x, y)
-        logger.info(string.format(
+        logger.dbg(string.format(
             "[bookshelf perf] paintTo: FIRST first_paint=%.0fms chip=%s",
             (_gettime() - _diag_paint_t0) * 1000, self.chip))
         return
@@ -5551,7 +5551,7 @@ function BookshelfWidget:_preloadStep()
         local ok, jobs = pcall(self._buildPhaseJobs, self, "next", self._preload_seen)
         self._preload_queue = (ok and jobs) or {}
         self._preload_total = #self._preload_queue
-        logger.info(string.format(
+        logger.dbg(string.format(
             "[bookshelf perf] preload-next: built in %.0fms size=%d chip=%s cursor=%d dir=%d",
             (_gettime() - _qb_t0) * 1000, self._preload_total,
             tostring(self.chip), self._cursor or 0, self._preload_dir or 0))
@@ -5563,7 +5563,7 @@ function BookshelfWidget:_preloadStep()
     if not q or #q == 0 then
         if self._preload_total > 0 then
             local c = self._preload_counters
-            logger.info(string.format(
+            logger.dbg(string.format(
                 "[bookshelf perf] preload-next: done warmed=%d already=%d failed=%d folders=%d progress=%d total=%d",
                 c.decoded, c.already, c.failed,
                 c.folders or 0, c.progress or 0, self._preload_total))
@@ -5597,7 +5597,7 @@ function BookshelfWidget:_chipPreloadStep()
         local ok, jobs = pcall(self._buildPhaseJobs, self, "chips", {})
         self._chip_preload_queue = (ok and jobs) or {}
         self._chip_preload_total = #self._chip_preload_queue
-        logger.info(string.format(
+        logger.dbg(string.format(
             "[bookshelf perf] preload-chips: built in %.0fms size=%d",
             (_gettime() - _qb_t0) * 1000, self._chip_preload_total))
     end
@@ -5608,7 +5608,7 @@ function BookshelfWidget:_chipPreloadStep()
     if not q or #q == 0 then
         if self._chip_preload_total > 0 then
             local c = self._chip_preload_counters
-            logger.info(string.format(
+            logger.dbg(string.format(
                 "[bookshelf perf] preload-chips: done warmed=%d already=%d failed=%d folders=%d progress=%d total=%d",
                 c.decoded, c.already, c.failed,
                 c.folders or 0, c.progress or 0, self._chip_preload_total))
@@ -5748,7 +5748,7 @@ function BookshelfWidget:_filePollTick()
     end
     self._home_dir_mtimes = snap or prev
     if changed then
-        logger.info("[bookshelf] file poll detected dir mtime change; rebuilding")
+        logger.dbg("[bookshelf] file poll detected dir mtime change; rebuilding")
         local Repo = require("lib/bookshelf_book_repository")
         if Repo.invalidateWalkCache then Repo.invalidateWalkCache() end
         -- Defer the rebuild to the next event-loop tick instead of running
@@ -5807,7 +5807,7 @@ function BookshelfWidget:_paginateNext()
         self:_syncPageFromCursor()
         self:_swapShelvesInPlace()
         self:_schedulePreload(1)
-        logger.info(string.format(
+        logger.dbg(string.format(
             "[bookshelf perf] paginate: dir=next %d->%d/%d TOTAL=%.0fms chip=%s",
             _diag_page0, self.page, total,
             (_gettime() - _diag_t0) * 1000, self.chip))
@@ -5820,7 +5820,7 @@ function BookshelfWidget:_paginateNext()
     if #self._drilldown_path == 0 and not self._chip_bar_hidden then
         local next_key = self:_chipNeighbour(1)
         if next_key then
-            logger.info(string.format(
+            logger.dbg(string.format(
                 "[bookshelf perf] paginate: dir=next at end -> chip-switch elapsed=%.0fms",
                 (_gettime() - _diag_t0) * 1000))
             self:_setActiveChip(next_key)
@@ -5837,7 +5837,7 @@ function BookshelfWidget:_paginatePrev()
         self:_syncPageFromCursor()
         self:_swapShelvesInPlace()
         self:_schedulePreload(-1)
-        logger.info(string.format(
+        logger.dbg(string.format(
             "[bookshelf perf] paginate: dir=prev %d->%d/%d TOTAL=%.0fms chip=%s",
             _diag_page0, self.page, self._total_pages or 1,
             (_gettime() - _diag_t0) * 1000, self.chip))
@@ -6032,7 +6032,7 @@ function BookshelfWidget:onSwipeShelvesUp(_, ges)
     self._expanded = true
     self:_rebuild()
     UIManager:setDirty(self, "ui")
-    logger.info(string.format(
+    logger.dbg(string.format(
         "[bookshelf perf] toggle: dir=expand TOTAL=%.0fms chip=%s",
         (_gettime() - _diag_t0) * 1000, self.chip))
     return true
@@ -6055,7 +6055,7 @@ function BookshelfWidget:onSwipeShelvesDown(_, ges)
         self._expanded = false
         self:_rebuild()
         UIManager:setDirty(self, "ui")
-        logger.info(string.format(
+        logger.dbg(string.format(
             "[bookshelf perf] toggle: dir=collapse TOTAL=%.0fms chip=%s",
             (_gettime() - _diag_t0) * 1000, self.chip))
         return true

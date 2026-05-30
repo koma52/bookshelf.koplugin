@@ -1888,7 +1888,7 @@ function Repo.getAll(path, limit, offset, sort_priority, filter, opts)
             end
         end
         local _pf_t1 = _gettime and _gettime() or 0
-        logger.info(string.format(
+        logger.dbg(string.format(
             "[bookshelf perf] getAll prefetch: total=%.0fms (cache_load=%.0fms loop=%.0fms) entries=%d hits=%d misses=%d needs={title=%s,authors=%s,series=%s}",
             (_pf_t1 - _pf_t0) * 1000,
             (_pf_t_cache - _pf_t0) * 1000,
@@ -4013,7 +4013,7 @@ function Repo.getBySource(source, filter, sort_priority, offset, limit, opts)
         local b = _safeBuildBookMeta(paths[i])
         if b then page[#page + 1] = b end
     end
-    logger.info(string.format(
+    logger.dbg(string.format(
         "[bookshelf perf] getBySource: kind=%s%s path=predicate cached=%s total=%d elapsed=%.0fms",
         kind, _diag_id, cached_paths and "HIT" or "MISS", total,
         (_gettime() - _diag_t0) * 1000))
